@@ -1,0 +1,34 @@
+import {chromium,expect} from '@playwright/test';
+import {mkdirSync} from 'node:fs';
+import assert from 'node:assert/strict';
+const browser=await chromium.launch();
+const page=await browser.newPage({viewport:{width:1280,height:900}});
+const errors=[];
+page.on('pageerror',error=>errors.push(error.message));
+try{
+  await page.goto('http://127.0.0.1:8765');
+  await page.getByLabel('会话令牌').fill('browser-test-only');
+  await page.getByRole('button',{name:'打开工作台'}).click();
+  await expect(page.getByText('合成流程演示',{exact:false})).toBeVisible();
+  await page.locator('.sidebar a[href="#/memory/search"]').click();
+  await page.locator('.subnav a[href="#/memory/library"]').click();
+  await page.locator('.memory-library > summary').click();
+  await expect(page.getByRole('heading',{name:'现在不喝咖啡，因为会睡不着',exact:true})).toBeVisible();
+  for(const detail of await page.locator('.memory-library article > details > summary').all())await detail.click();
+  const negative=page.locator('article').filter({has:page.getByRole('heading',{name:'现在不喝咖啡，因为会睡不着',exact:true})});
+  await expect(negative).toContainText('否定');
+  await expect(negative).toContainText('但现在已经不喝了，会睡不着。');
+  const reported=page.locator('article').filter({has:page.getByRole('heading',{name:'据对方转述，其同事喜欢每周骑行',exact:true})});
+  await expect(reported).toContainText('第三方');
+  await expect(reported).toContainText('转述');
+  await expect(reported).toContainText('刚才说的是我同事，不是我本人。');
+  await page.locator('.sidebar a[href="#/tasks/automatic"]').click();
+  await page.locator('.subnav a[href="#/tasks/history"]').click();
+  await page.getByRole('button',{name:'刷新任务',exact:true}).click();
+  await expect(page.getByText('合成返回验证完成：1',{exact:false})).toBeVisible();
+  await expect(page.getByText('上下文限制：',{exact:false})).toContainText('会话含未处理的图片');
+  mkdirSync('../docs/screenshots',{recursive:true});
+  await page.screenshot({path:'../docs/screenshots/context-demo.png',fullPage:true});
+  assert.deepEqual(errors,[]);
+  console.log('PASS: preset context negation/reported fields, complete evidence, synthetic banner and task status');
+}finally{await browser.close()}

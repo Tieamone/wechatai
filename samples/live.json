@@ -1,0 +1,4 @@
+{
+  "account_ref":"synthetic-account","contact_ref":"synthetic-peer","mode":"live",
+  "messages":[{"schema_version":1,"conversation_id":"demo","source":{"adapter":"manual-json","id":"live-1","partition":"demo"},"sender_role":"peer","event_time":"2026-10-25T14:00:00+08:00","type":"text","text":"合成示例：今天要不要去咖啡店？","revision":1}]
+}

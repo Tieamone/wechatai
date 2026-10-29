@@ -1,0 +1,10 @@
+{
+  "account_ref": "synthetic-account",
+  "contact_ref": "synthetic-peer",
+  "mode": "history",
+  "messages": [
+    {"schema_version":1,"conversation_id":"demo","source":{"adapter":"manual-json","id":"history-1","partition":"demo"},"sender_role":"peer","event_time":"2026-10-01T10:00:00+08:00","type":"text","text":"合成示例：最近晚上不喝咖啡了，会睡不着。","revision":1},
+    {"schema_version":1,"conversation_id":"demo","source":{"adapter":"manual-json","id":"history-2","partition":"demo"},"sender_role":"self","event_time":"2026-10-01T10:01:00+08:00","type":"text","text":"合成示例：那下次一起喝茶。","revision":1},
+    {"schema_version":1,"conversation_id":"demo","source":{"adapter":"manual-json","id":"history-3","partition":"demo"},"sender_role":"peer","event_time":"2026-10-02T14:00:00+08:00","type":"text","text":"合成示例：周末想去公园散步。","revision":1}
+  ]
+}
