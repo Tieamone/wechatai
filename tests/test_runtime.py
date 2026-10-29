@@ -9,6 +9,18 @@ from backend.app import create_app
 from backend import runtime
 
 
+def test_status_replace_retries_only_temporary_access_denial(monkeypatch):
+    monkeypatch.setattr(runtime.time,'sleep',lambda _:None)
+    temporary=Mock()
+    temporary.replace.side_effect=[PermissionError(),None]
+    runtime.replace_status(temporary,'status.json')
+    assert temporary.replace.call_count==2
+    temporary.reset_mock()
+    temporary.replace.side_effect=PermissionError()
+    with pytest.raises(PermissionError):runtime.replace_status(temporary,'status.json')
+    assert temporary.replace.call_count==6
+
+
 def test_control_start_once_and_stop_during_startup(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime,'current_session',lambda _: 'test-session')
     spawn = Mock()
@@ -47,7 +59,7 @@ def test_start_failure_and_missing_binding(tmp_path, monkeypatch):
 
 def test_crashed_start_does_not_stay_active(tmp_path):
     directory = tmp_path/'bot'
-    directory.mkdir()
+    directory.mkdir(exist_ok=True)
     (directory/'status.json').write_text(json.dumps({'state':'starting','updated_at':(datetime.now(timezone.utc)-timedelta(seconds=20)).isoformat()}))
     assert runtime.status(tmp_path,'bot') == {'state':'error','active':False,'updated_at':json.loads((directory/'status.json').read_text())['updated_at']}
 
@@ -72,7 +84,7 @@ def test_bot_managed_stop_and_uncertain_exit(tmp_path, monkeypatch, stop_before_
     monkeypatch.setattr('sys.argv', ['bot_dispatch', '--watch', '--managed'])
     initialize(tmp_path/'data/memory.sqlite3')
     directory = tmp_path/'data/bot'
-    directory.mkdir()
+    directory.mkdir(exist_ok=True)
     if stop_before_start:
         (directory/'stop.request').touch()
     dispatch = Mock(return_value='uncertain')

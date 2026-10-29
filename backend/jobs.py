@@ -111,46 +111,51 @@ def invalidate_jobs(db, message_id):
             db.execute("UPDATE job SET state='failed',error='source_or_correction_changed',result_json=NULL,owner=NULL,lease_until=NULL WHERE id=?", (row['id'],))
 
 
+def create_initialization(db, body):
+    if not db.in_transaction:
+        db.execute('BEGIN IMMEDIATE')
+    if db.execute("SELECT 1 FROM initialization WHERE state IN ('active','paused') AND mode!='auto'").fetchone():
+        raise HTTPException(409, '已有初始化范围，请先处理或取消')
+    cutoff = datetime.now(timezone.utc).isoformat()
+    if body.mode == 'full':
+        if body.message_ids:
+            raise HTTPException(422, '全量模式无需消息 ID')
+        rows = db.execute("SELECT * FROM message WHERE type='text' AND (event_utc<=? OR event_utc IS NULL) ORDER BY event_utc,id", (cutoff,)).fetchall()
+    else:
+        if not body.message_ids:
+            raise HTTPException(422, '分批模式需要选定消息')
+        ids = sorted(set(body.message_ids))
+        rows = db.execute('SELECT * FROM message WHERE id IN (' + ','.join('?' for _ in ids) + ') ORDER BY event_utc,id', ids).fetchall()
+        if len(rows) != len(ids) or any(r['type'] != 'text' or (r['event_utc'] and r['event_utc'] > cutoff) for r in rows):
+            raise HTTPException(422, '选择包含不存在、非文字或截止时间之后的消息')
+    if not rows:
+        raise HTTPException(422, '没有可处理的历史文字')
+    init_id = db.execute('INSERT INTO initialization(mode,cutoff) VALUES(?,?)', (body.mode, cutoff)).lastrowid
+    # Bounded 12-message windows with 2-message overlap, always preserving both roles.
+    # This is a configurable-later context baseline, not a topic segmentation claim.
+    offset = 0
+    has_nontext = bool(db.execute("SELECT 1 FROM message WHERE type!='text' LIMIT 1").fetchone())
+    while offset < len(rows):
+        window = rows[offset:offset + 12]
+        warnings = context_warnings(db, window, offset > 0 or offset + 12 < len(rows) or body.mode == 'batch', has_nontext=has_nontext)
+        payload = {'messages': [{'id': r['id'], 'revision': r['revision']} for r in window],
+                   'context_limited': bool(warnings), 'context_warnings': warnings}
+        serialized = json.dumps(payload, sort_keys=True)
+        key = hashlib.sha256(f'{init_id}:prepare-v1:{serialized}'.encode()).hexdigest()
+        db.execute('INSERT INTO job(initialization_id,idempotency_key,input_json) VALUES(?,?,?)', (init_id, key, serialized))
+        if offset + 12 >= len(rows):
+            break
+        offset += 10
+    return {'id': init_id, 'cutoff': cutoff, 'message_count': len(rows)}
+
+
 def router(path: Path):
     routes = APIRouter(prefix='/api/initializations')
 
     @routes.post('')
     def start(body: Initialization):
         with connect(path) as db:
-            db.execute('BEGIN IMMEDIATE')
-            if db.execute("SELECT 1 FROM initialization WHERE state IN ('active','paused') AND mode!='auto'").fetchone():
-                raise HTTPException(409, '已有初始化范围，请先处理或取消')
-            cutoff = datetime.now(timezone.utc).isoformat()
-            if body.mode == 'full':
-                if body.message_ids:
-                    raise HTTPException(422, '全量模式无需消息 ID')
-                rows = db.execute("SELECT * FROM message WHERE type='text' AND (event_utc<=? OR event_utc IS NULL) ORDER BY event_utc,id", (cutoff,)).fetchall()
-            else:
-                if not body.message_ids:
-                    raise HTTPException(422, '分批模式需要选定消息')
-                ids = sorted(set(body.message_ids))
-                rows = db.execute('SELECT * FROM message WHERE id IN (' + ','.join('?' for _ in ids) + ') ORDER BY event_utc,id', ids).fetchall()
-                if len(rows) != len(ids) or any(r['type'] != 'text' or (r['event_utc'] and r['event_utc'] > cutoff) for r in rows):
-                    raise HTTPException(422, '选择包含不存在、非文字或截止时间之后的消息')
-            if not rows:
-                raise HTTPException(422, '没有可处理的历史文字')
-            init_id = db.execute('INSERT INTO initialization(mode,cutoff) VALUES(?,?)', (body.mode, cutoff)).lastrowid
-            # Bounded 12-message windows with 2-message overlap, always preserving both roles.
-            # This is a configurable-later context baseline, not a topic segmentation claim.
-            offset = 0
-            has_nontext = bool(db.execute("SELECT 1 FROM message WHERE type!='text' LIMIT 1").fetchone())
-            while offset < len(rows):
-                window = rows[offset:offset + 12]
-                warnings = context_warnings(db, window, offset > 0 or offset + 12 < len(rows) or body.mode == 'batch', has_nontext=has_nontext)
-                payload = {'messages': [{'id': r['id'], 'revision': r['revision']} for r in window],
-                           'context_limited': bool(warnings), 'context_warnings': warnings}
-                serialized = json.dumps(payload, sort_keys=True)
-                key = hashlib.sha256(f'{init_id}:prepare-v1:{serialized}'.encode()).hexdigest()
-                db.execute('INSERT INTO job(initialization_id,idempotency_key,input_json) VALUES(?,?,?)', (init_id, key, serialized))
-                if offset + 12 >= len(rows):
-                    break
-                offset += 10
-            return {'id': init_id, 'cutoff': cutoff, 'message_count': len(rows)}
+            return create_initialization(db, body)
 
     @routes.get('')
     def listing():

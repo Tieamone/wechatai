@@ -17,7 +17,13 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--context',action='store_true')
+    parser.add_argument('--p0',action='store_true')
     args=parser.parse_args()
+    if not args.p0:
+        # Legacy UI scenarios use fixed historical timestamps; P0 exercises real clocks.
+        from backend import policy
+        policy.age_reason=lambda *args,**kwargs:None
+        policy.quiet=lambda *args:False
     sock = socket.socket()
     try:
         sock.bind(('127.0.0.1', 8765))
@@ -48,7 +54,9 @@ def main():
             if not server.started:
                 raise RuntimeError('Test server did not start')
             env = {**os.environ, 'PLAYWRIGHT_BROWSERS_PATH':str(ROOT/'tools'/'browsers')}
-            return subprocess.run(['node','e2e/context.mjs' if args.context else 'e2e/workflow.mjs'], cwd=ROOT/'frontend', env=env, timeout=120).returncode
+            if args.p0: env['TEST_LOGIN_CODE']=app.state.login_codes.issue()
+            script='e2e/p0.mjs' if args.p0 else ('e2e/context.mjs' if args.context else 'e2e/workflow.mjs')
+            return subprocess.run(['node',script], cwd=ROOT/'frontend', env=env, timeout=120).returncode
         finally:
             server.should_exit = True
             thread.join(15)

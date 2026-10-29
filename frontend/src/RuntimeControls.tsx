@@ -1,3 +1,4 @@
+import {usePolling} from './usePolling';
 import {useEffect, useState} from 'react';
 
 const labels: Record<string,string> = {running:'运行中', starting:'启动中', stopping:'正在停止', stopped:'已停止', error:'异常停止，请检查微信登录和绑定', unresponsive:'心跳超时，请检查后台程序'};
@@ -5,13 +6,7 @@ export function RuntimeControls({api}:{api:(path:string,method?:string)=>Promise
   const [status,setStatus]=useState<any>(null);
   const [error,setError]=useState('');
   const [busy,setBusy]=useState(false);
-  useEffect(()=>{
-    let active=true;
-    async function poll(){try{const s=await api('runtime');if(active){setStatus(s);setError('')}}catch(e){if(active)setError(String(e))}}
-    void poll();
-    const timer=setInterval(poll,3000);
-    return ()=>{active=false;clearInterval(timer)};
-  },[api]);
+  usePolling(api,['runtime'],([s])=>{setStatus(s);setError('')},e=>setError(String(e)),3000,true,true);
   async function change(name:string,action:string){
     setBusy(true);setError('');
     try{await api(`runtime/${name}/${action}`,'POST');setStatus(await api('runtime'))}catch(e){setError(String(e))}finally{setBusy(false)}

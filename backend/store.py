@@ -129,11 +129,11 @@ def connect(path: Path):
         db.close()
 
 
-def initialize(path: Path):
+def _initialize(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as db:
         version = db.execute('PRAGMA user_version').fetchone()[0]
-        if version > 18:
+        if version > SCHEMA_VERSION:
             raise RuntimeError('Database schema is newer than this application')
         db.execute('PRAGMA journal_mode=WAL')
         # Each migration commits its schema and version together, including DDL.
@@ -276,8 +276,52 @@ CREATE TABLE IF NOT EXISTS memory_review (
  confirmed_version INTEGER NOT NULL, confirmed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 PRAGMA user_version=18; COMMIT;''')
+            version = 18
+        if version == 18:
+            db.executescript('''BEGIN IMMEDIATE;
+CREATE TABLE notification_policy (
+ id INTEGER PRIMARY KEY CHECK(id=1), freshness_seconds INTEGER NOT NULL DEFAULT 300,
+ validity_seconds INTEGER NOT NULL DEFAULT 900, future_seconds INTEGER NOT NULL DEFAULT 120,
+ quiet_enabled INTEGER NOT NULL DEFAULT 1, quiet_start TEXT NOT NULL DEFAULT '23:00',
+ quiet_end TEXT NOT NULL DEFAULT '08:00', cooldown_seconds INTEGER NOT NULL DEFAULT 7200
+);
+INSERT INTO notification_policy(id) VALUES(1);
+CREATE TABLE notification_record (
+ id INTEGER PRIMARY KEY, kind TEXT NOT NULL, item_id INTEGER NOT NULL, channel TEXT NOT NULL,
+ trigger_id INTEGER NOT NULL REFERENCES message(id), memory_id INTEGER REFERENCES memory(id),
+ watch_id INTEGER REFERENCES watch_item(id), state TEXT NOT NULL, reason TEXT,
+ synthetic INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL, updated_at REAL NOT NULL,
+ UNIQUE(kind,item_id,channel,synthetic)
+);
+CREATE INDEX notification_cooldown ON notification_record(channel,memory_id,created_at);
+CREATE TABLE deferred_message (
+ message_id INTEGER PRIMARY KEY REFERENCES message(id), message_revision INTEGER NOT NULL,
+ reason TEXT NOT NULL, initialization_id INTEGER REFERENCES initialization(id)
+);
+PRAGMA user_version=19; COMMIT;''')
         if db.execute('SELECT normalization_version FROM mapping_policy').fetchone()[0] != 1:
             raise RuntimeError('Unsupported mapping normalization version')
+
+
+SCHEMA_VERSION = 19
+
+
+def initialize(path: Path):
+    from .backups import migration_guard, snapshot, prune
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with connect(path) as db:
+        version = db.execute('PRAGMA user_version').fetchone()[0]
+    if version == SCHEMA_VERSION:
+        return _initialize(path)
+    with migration_guard(path):
+        with connect(path) as db:
+            version = db.execute('PRAGMA user_version').fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise RuntimeError('Database schema is newer than this application')
+            if version and version < SCHEMA_VERSION:
+                snapshot(db, path, version, SCHEMA_VERSION)
+        _initialize(path)
+        prune(path)
 
 
 def tokens(text: str) -> str:

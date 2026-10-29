@@ -1,4 +1,4 @@
-"""Opt-in, one-shot watch notifications; no automatic worker or chat text export."""
+"""Transactional policy reservation for watch and ordinary notifications."""
 import re
 import time
 
@@ -13,84 +13,71 @@ TEST_TITLE = '聊天记忆助手：合成通知测试'
 TEST_BODY = '这是一条测试消息，不是真实聊天提醒。请检查手机通知栏。'
 
 
-def pending(path, channel):
+def pending(path, channel, *, synthetic=False):
     with connect(path) as db:
-        return [r[0] for r in db.execute('''SELECT r.id FROM reminder r
+        return [r[0] for r in db.execute("""SELECT r.id FROM reminder r
             LEFT JOIN notification_attempt n ON n.reminder_id=r.id AND n.channel=?
-            WHERE r.status='active' AND n.reminder_id IS NULL ORDER BY r.id''', (channel,))]
-
-
-def deliver(path, reminder_id, channel, sender, *, retry_rejected=False):
-    """Reserve before I/O. A crash/timeout stays uncertain and is never auto-retried.
-
-    accepted means transport acceptance, not phone display. One notification per
-    reminder/channel; later revisions cannot cause repeated alerts. Revocation
-    before reservation suppresses sending; an already accepted push cannot be recalled.
-    """
-    with connect(path) as db:
-        db.execute('BEGIN IMMEDIATE')
-        row = db.execute('SELECT status FROM reminder WHERE id=?', (reminder_id,)).fetchone()
-        if not row or row['status'] != 'active':
-            return 'skipped_inactive'
-        prior = db.execute('SELECT state FROM notification_attempt WHERE reminder_id=? AND channel=?',
-                           (reminder_id, channel)).fetchone()
-        if prior and not (prior['state'] == 'rejected' and retry_rejected):
-            return 'skipped_' + prior['state']
-        db.execute('''INSERT INTO notification_attempt(reminder_id,channel,state) VALUES(?,?,'uncertain')
-            ON CONFLICT(reminder_id,channel) DO UPDATE SET state='uncertain',
-            attempts=attempts+1,updated_at=CURRENT_TIMESTAMP''', (reminder_id, channel))
-    try:
-        state = sender(TITLE, BODY)
-        if state not in {'accepted', 'rejected', 'uncertain'}:
-            state = 'uncertain'
-    except Exception:
-        # Transport errors can contain a credential-bearing URL. Do not persist them.
-        state = 'uncertain'
-    with connect(path) as db:
-        db.execute('UPDATE notification_attempt SET state=?,updated_at=CURRENT_TIMESTAMP WHERE reminder_id=? AND channel=?',
-                   (state, reminder_id, channel))
-    return state
+            WHERE r.status='active' AND (n.reminder_id IS NULL OR ?)
+            AND NOT EXISTS(SELECT 1 FROM notification_record x WHERE x.kind='watch' AND x.item_id=r.id AND x.channel=? AND x.synthetic=?)
+            ORDER BY r.id""", (channel,synthetic,channel,synthetic))]
 
 
 def pending_associations(path, channel):
     with connect(path) as db:
         reconcile_confirmed(db)
-        return [r[0] for r in db.execute('''SELECT a.id FROM association a
+        return [r[0] for r in db.execute("""SELECT a.id FROM association a
             LEFT JOIN association_notification n ON n.association_id=a.id AND n.channel=?
             WHERE a.state='confirmed_model' AND n.association_id IS NULL
-            AND (SELECT enabled FROM auto_control WHERE id=1)=1 ORDER BY a.id''',(channel,))]
+            AND (SELECT enabled FROM auto_control WHERE id=1)=1
+            AND NOT EXISTS(SELECT 1 FROM notification_record x WHERE x.kind='ordinary' AND x.item_id=a.id AND x.channel=? AND x.synthetic=0)
+            ORDER BY a.id""",(channel,channel))]
 
 
-def deliver_association(path, candidate_id, channel, sender):
+def _deliver(path, kind, item_id, channel, sender, *, synthetic=False, retry_rejected=False):
+    from . import policy
     with connect(path) as db:
         db.execute('BEGIN IMMEDIATE')
-        reconcile_confirmed(db)
-        row=db.execute("SELECT * FROM association WHERE id=? AND state='confirmed_model' AND (SELECT enabled FROM auto_control WHERE id=1)=1",(candidate_id,)).fetchone()
-        if not row:
-            return 'skipped_inactive'
-        prior=db.execute('SELECT state FROM association_notification WHERE association_id=? AND channel=?',(candidate_id,channel)).fetchone()
-        if prior:
+        if kind=='ordinary':
+            reconcile_confirmed(db)
+            valid=db.execute("SELECT 1 FROM association WHERE id=? AND state='confirmed_model' AND (SELECT enabled FROM auto_control WHERE id=1)=1",(item_id,)).fetchone()
+            prior=db.execute('SELECT state FROM association_notification WHERE association_id=? AND channel=?',(item_id,channel)).fetchone()
+        else:
+            valid=db.execute("""SELECT 1 FROM reminder r JOIN watch_item w ON w.id=r.watch_id
+                LEFT JOIN memory m ON m.id=w.source_memory_id WHERE r.id=? AND r.status='active'
+                AND w.enabled=1 AND w.revision=r.watch_revision AND (w.source_memory_id IS NULL OR m.status='active')""",(item_id,)).fetchone()
+            prior=db.execute('SELECT state FROM notification_attempt WHERE reminder_id=? AND channel=?',(item_id,channel)).fetchone()
+        if not valid:return 'skipped_inactive'
+        if not synthetic and prior and not (retry_rejected and prior['state']=='rejected'):
             return 'skipped_'+prior['state']
-        duplicate=db.execute('''SELECT 1 FROM association_notification n JOIN association a ON a.id=n.association_id
-            WHERE n.channel=? AND n.state IN ('accepted','uncertain')
-            AND (a.trigger_id=? OR (a.memory_id=? AND n.created_at>?))''',
-            (channel,row['trigger_id'],row['memory_id'],time.time()-120)).fetchone()
-        # An accepted/uncertain watch notification for the same trigger already serves as a generic alert.
-        watch=db.execute('''SELECT 1 FROM notification_attempt n JOIN reminder r ON r.id=n.reminder_id
-            WHERE n.channel=? AND n.state IN ('accepted','uncertain') AND r.trigger_id=?''',(channel,row['trigger_id'])).fetchone()
-        state='skipped_duplicate' if duplicate or watch else 'uncertain'
-        db.execute('INSERT INTO association_notification VALUES(?,?,?,?)',(candidate_id,channel,state,time.time()))
-    if state=='skipped_duplicate':
-        return state
+        skipped=policy.reserve(db,kind,item_id,channel,synthetic=synthetic,retry_rejected=retry_rejected)
+        if skipped:return skipped
+        if not synthetic:
+            if kind=='watch':
+                db.execute("""INSERT INTO notification_attempt(reminder_id,channel,state) VALUES(?,?,'uncertain')
+                    ON CONFLICT(reminder_id,channel) DO UPDATE SET state='uncertain',attempts=attempts+1,updated_at=CURRENT_TIMESTAMP""",(item_id,channel))
+            else:
+                db.execute("INSERT INTO association_notification VALUES(?,?,'uncertain',?)",(item_id,channel,time.time()))
     try:
         state=sender(TITLE,BODY)
-        if state not in {'accepted','rejected','uncertain'}:
-            state='uncertain'
+        if state not in {'accepted','rejected','uncertain'}:state='uncertain'
     except Exception:
         state='uncertain'
     with connect(path) as db:
-        db.execute('UPDATE association_notification SET state=? WHERE association_id=? AND channel=?',(state,candidate_id,channel))
+        policy.finish(db,kind,item_id,channel,state,synthetic)
+        if not synthetic:
+            if kind=='watch':
+                db.execute('UPDATE notification_attempt SET state=?,updated_at=CURRENT_TIMESTAMP WHERE reminder_id=? AND channel=?',(state,item_id,channel))
+            else:
+                db.execute('UPDATE association_notification SET state=? WHERE association_id=? AND channel=?',(state,item_id,channel))
     return state
+
+
+def deliver(path, reminder_id, channel, sender, *, retry_rejected=False, synthetic=False):
+    return _deliver(path,'watch',reminder_id,channel,sender,retry_rejected=retry_rejected,synthetic=synthetic)
+
+
+def deliver_association(path,candidate_id,channel,sender):
+    return _deliver(path,'ordinary',candidate_id,channel,sender)
 
 
 class ServerChan:

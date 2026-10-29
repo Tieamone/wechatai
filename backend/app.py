@@ -1,4 +1,7 @@
 import secrets
+import time
+from . import policy
+from .login import LoginCode, Exchange
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from typing import Literal
@@ -36,7 +39,7 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
     @asynccontextmanager
     async def lifespan(app):
         managed = worker is not None and data_dir.resolve()==(ROOT/'data').resolve() and synthetic_provider is None
-        with runtime.workbench_session(data_dir) if managed else nullcontext():
+        with runtime.workbench_session(data_dir) if managed and not runtime.owned_workbench(data_dir) else nullcontext():
             if worker:
                 worker.start()
             try:
@@ -50,8 +53,15 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
 
     app = FastAPI(title='微信聊天记忆助手', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.token = token
+    app.state.login_codes = LoginCode()
+
+    @app.post('/api/session/exchange')
+    def exchange(body: Exchange):
+        app.state.login_codes.consume(body.code)
+        return {'token':token}
     app.state.db_path = path
     app.state.preparation_worker = worker
+    app.include_router(policy.router(path))
     app.include_router(memory_router(path))
     app.include_router(jobs_router(path))
     app.include_router(model_router(path))
@@ -63,7 +73,7 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
 
     @app.get('/api/worker')
     def worker_status():
-        return worker.status() if worker else {'running': False, 'error': None, 'external_enabled': False}
+        return worker.status() if worker else {'running': False, 'error': None, 'scope':'preparation_and_opt_in_automatic'}
 
     @app.post('/api/worker/restart')
     def restart_worker():
@@ -79,7 +89,7 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
         origin = request.headers.get('origin')
         if origin and origin not in {'http://127.0.0.1:8765', 'http://localhost:8765'}:
             return JSONResponse({'detail': 'Origin denied'}, status_code=403)
-        if request.url.path.startswith('/api/'):
+        if request.url.path.startswith('/api/') and request.url.path != '/api/session/exchange':
             supplied = request.headers.get('authorization', '')
             if not secrets.compare_digest(supplied, f'Bearer {token}'):
                 return JSONResponse({'detail': '请使用启动窗口中的会话令牌'}, status_code=401)
@@ -99,8 +109,8 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
                     'text_messages': db.execute("SELECT count(*) FROM message WHERE type='text'").fetchone()[0],
                     'unknown_time': db.execute('SELECT count(*) FROM message WHERE event_utc IS NULL').fetchone()[0],
                     'memories': db.execute("SELECT count(*) FROM memory WHERE status='active'").fetchone()[0], 'api': 'manual_enabled' if ai_config.get('enabled') and synthetic_provider is None else 'disabled', 'collector': collection['state'], 'collector_detail': collection,
-                    'mobile': 'not_connected', 'synthetic_demo': synthetic_provider is not None,
-                    'stage': '基础原型：本地原文搜索 / 人工关注'}
+                    'mobile': 'bot_notification_only', 'synthetic_demo': synthetic_provider is not None,
+                    'stage': '本地采集、记忆与提醒工作台'}
 
     def runtime_enabled():
         return data_dir.resolve() == (ROOT / 'data').resolve() and synthetic_provider is None
@@ -127,7 +137,9 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
             raise HTTPException(422, '首版只允许一个会话')
         conversation = next(iter(ids))
         inserted = updated = duplicates = 0
+        imported_at = time.time()
         with connect(path) as db:
+            config = policy.settings(db)
             existing = db.execute('SELECT * FROM conversation').fetchone()
             if existing and (existing['id'], existing['account_ref'], existing['contact_ref']) != (conversation, body.account_ref, body.contact_ref):
                 raise HTTPException(409, '已固定其他账号或联系人')
@@ -157,13 +169,17 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
                     inserted += 1
                 if m.type == 'text':
                     db.execute('INSERT INTO message_fts(rowid,text) VALUES(?,?)', (message_id, tokens(m.text)))
-                if body.mode == 'live' and not previous:
+                reason = policy.age_reason(m.utc_time(), imported_at, config) if body.mode == 'live' and synthetic_provider is None else None
+                live = body.mode == 'live' and reason is None
+                if body.mode == 'live' and not previous and reason:
+                    policy.defer(db, message_id, reason)
+                if live and not previous:
                     supersede_recent(db, message_id)
                     update_watches(db, message_id)
                 # Explicit exact user watch matching only. No fabricated ordinary memory.
-                if body.mode == 'live' and m.sender_role == 'peer' and m.type == 'text' and not previous:
+                if live and m.sender_role == 'peer' and m.type == 'text' and not previous:
                     enqueue_candidates(db, message_id)
-                if body.mode == 'live' and not previous:
+                if live and not previous:
                     enqueue_automatic(db, message_id)
                 db.execute('INSERT INTO ingestion_checkpoint VALUES(?,?,?) ON CONFLICT(adapter,partition) DO UPDATE SET cursor=excluded.cursor', (m.source.adapter, m.source.partition, m.source.id))
         return {'inserted': inserted, 'updated': updated, 'duplicates': duplicates}
@@ -211,6 +227,7 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
             cards = []
             for row in db.execute("SELECT r.*,m.text AS trigger_text,m.event_time,w.user_text,w.source_memory_id FROM reminder r JOIN message m ON m.id=r.trigger_id JOIN watch_item w ON w.id=r.watch_id LEFT JOIN memory fact ON fact.id=w.source_memory_id WHERE r.status='active' AND w.enabled=1 AND r.watch_revision=w.revision AND (w.source_memory_id IS NULL OR fact.status='active') ORDER BY r.id DESC LIMIT 100").fetchall():
                 card = dict(row)
+                card['notification'] = policy.card_status(db, 'watch', row['id'])
                 card['recent_context'] = context_quotes(db, row['context_json'])
                 card['source_memory'] = None
                 if row['source_memory_id']:

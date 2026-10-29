@@ -1,4 +1,4 @@
-"""One in-process local preparation worker; never calls a model provider."""
+"""One worker for local preparation and explicitly enabled automatic model processing."""
 import threading
 import sqlite3
 
@@ -60,5 +60,5 @@ class PreparationWorker:
             self.stop_event.wait(.05 if result['processed'] else .5)
 
     def status(self):
-        return {'running': self.thread.is_alive(), 'error': self.error, 'external_enabled': False,
+        return {'running': self.thread.is_alive(), 'error': self.error, 'scope': 'preparation_and_opt_in_automatic',
                 'synthetic_extraction': self.synthetic_provider is not None}

@@ -11,7 +11,7 @@ import time
 
 from backend.app import create_app
 from backend.collector import import_rows
-from backend.runtime import current_session, session_alive
+from backend.runtime import current_session, session_alive, replace_status
 from tools.contact_reader import ContactReader
 from tools.wechat_source import ROOT
 
@@ -22,7 +22,7 @@ def save(name, value):
     path = DIRECTORY/name
     temporary = path.with_suffix('.tmp')
     temporary.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
-    temporary.replace(path)
+    replace_status(temporary,path)
 
 
 def process_birth(pid):

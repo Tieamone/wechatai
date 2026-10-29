@@ -23,7 +23,7 @@ def test_session_restart_does_not_adopt_old_workers(tmp_path):
 def test_real_runner_processes_exit_when_workbench_ends(tmp_path,abrupt):
     data=tmp_path/'data'
     initialize(data/'memory.sqlite3')
-    collector=data/'collector';collector.mkdir()
+    collector=data/'collector';collector.mkdir(exist_ok=True)
     (collector/'binding.json').write_text(json.dumps({'pid':1,'process_birth':1,'account_dir':'synthetic','peer':'peer','self_id':'self'}))
     (collector/'initialized.json').write_text('{}')
     root=Path(__file__).resolve().parents[1]
@@ -59,7 +59,13 @@ raise SystemExit(c.main())
                 if states==['running','watching']:break
             except (OSError,ValueError):pass
             time.sleep(.05)
-        else:pytest.fail('Test runners failed to start')
+        else:
+            diagnostics=[]
+            for child in children:
+                if child.poll() is None:child.kill()
+                out,err=child.communicate(timeout=5)
+                diagnostics.append((child.returncode,out.decode(errors='replace'),err.decode(errors='replace')))
+            pytest.fail('Synthetic runners failed to start: '+repr(diagnostics))
         if abrupt:parent.kill()
         else:(tmp_path/'close').touch()
         parent.wait(5)

@@ -70,5 +70,5 @@ def preview(db, text):
     remainder = TOKEN.sub('', replaced)
     blocked = bool(SUSPICIOUS.search(remainder))
     return {'status': 'blocked' if blocked else 'preview_only',
-            'reason': '存在未处理的敏感疑点' if blocked else '仅本地预览；自由文本检测不完备，外发尚未启用',
+            'reason': '存在未处理的敏感疑点' if blocked else '本次仅本地预览，不会发送；自由文本检测不完备，模型调用由模型配置与任务开关控制',
             'text': replaced, 'allowed_tokens': TOKEN.findall(replaced), 'external_enabled': False}

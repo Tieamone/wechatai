@@ -7,11 +7,18 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 import uuid
+from contextvars import ContextVar
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = {'collector': 'tools.collect_contact', 'bot': 'tools.bot_dispatch'}
 CONTROL_LOCK = threading.Lock()
+OWNED_WORKBENCH = ContextVar('owned_workbench', default=None)
+
+
+def owned_workbench(data_dir):
+    return OWNED_WORKBENCH.get() == data_dir.resolve()
 
 
 @contextmanager
@@ -19,11 +26,13 @@ def workbench_session(data_dir):
     """OS releases this lock even when the console closes or the backend crashes."""
     directory=data_dir/'runtime'
     with worker_lock(directory,'workbench'):
+        owned = OWNED_WORKBENCH.set(data_dir.resolve())
         session=uuid.uuid4().hex
         (directory/'session').write_text(session,encoding='ascii')
         try:
             yield session
         finally:
+            OWNED_WORKBENCH.reset(owned)
             for name in MODULES:
                 (data_dir/name).mkdir(parents=True,exist_ok=True)
                 (data_dir/name/'stop.request').touch()
@@ -66,11 +75,22 @@ def locked(directory, name):
         return True
 
 
+def replace_status(temporary, path):
+    # Windows readers can briefly deny replacement of an open status file.
+    for attempt in range(6):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt==5:raise
+            time.sleep(.02)
+
+
 def write_status(directory, state):
     path = directory / 'status.json'
     temporary = directory / f'status-{os.getpid()}.tmp'
     temporary.write_text(json.dumps({'state': state, 'updated_at': datetime.now(timezone.utc).isoformat()}), encoding='utf-8')
-    temporary.replace(path)
+    replace_status(temporary,path)
 
 
 def status(data_dir, name):

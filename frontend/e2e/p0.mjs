@@ -1,0 +1,47 @@
+import {chromium,expect} from '@playwright/test';
+import assert from 'node:assert/strict';
+
+const browser=await chromium.launch();
+const context=await browser.newContext();
+const page=await context.newPage();
+const errors=[];
+page.on('pageerror',e=>errors.push(e.message));
+const requests=[];
+page.on('request',r=>{if(r.url().includes('/api/'))requests.push(new URL(r.url()).pathname)});
+try{
+  await page.goto('http://127.0.0.1:8765/#login='+process.env.TEST_LOGIN_CODE);
+  await expect(page.getByRole('heading',{name:'工作台概况'})).toBeVisible();
+  assert.equal(new URL(page.url()).hash,'#/home');
+  const cdp=await context.newCDPSession(page);
+  const history=await cdp.send('Page.getNavigationHistory');
+  assert.ok(history.entries.every(e=>!e.url.includes('#login=')));
+  await page.reload();
+  await expect(page.getByRole('heading',{name:'工作台概况'})).toBeVisible();
+  const other=await context.newPage();
+  await other.goto('http://127.0.0.1:8765');
+  await expect(other.getByLabel('会话令牌')).toBeVisible();
+  await other.close();
+  await page.evaluate(()=>{location.hash='/settings/notifications'});
+  await expect(page.getByLabel('入库新鲜度（分钟）')).toHaveValue('5');
+  await expect(page.getByLabel('发送有效期（分钟）')).toHaveValue('15');
+  await page.getByLabel('勿扰结束').fill('23:00');
+  await page.getByRole('button',{name:'保存通知策略'}).click();
+  await expect(page.getByRole('status')).toHaveText('已保存');
+  await expect(page.getByLabel('启用勿扰')).not.toBeChecked();
+  await page.evaluate(()=>{location.hash='/home'});
+  await expect(page.getByRole('heading',{name:'工作台概况'})).toBeVisible();
+  await page.waitForTimeout(500);
+  requests.length=0;
+  await page.waitForTimeout(5500);
+  assert.ok(requests.includes('/api/status'));
+  assert.ok(!requests.some(p=>/notification-policy|initializations|automatic/.test(p)));
+  // Deterministic visibility event; test actual browser fetch cancellation, not hook mocks.
+  await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))});
+  await page.waitForTimeout(300);requests.length=0;
+  await page.waitForTimeout(3500);
+  assert.deepEqual(requests,[]);
+  await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
+  await expect.poll(()=>requests.includes('/api/status')).toBe(true);
+  assert.deepEqual(errors,[]);
+  console.log('P0 browser PASS: one-time login, history replacement, refresh, new tab, settings, module/tab polling');
+}finally{await browser.close()}

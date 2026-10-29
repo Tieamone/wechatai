@@ -8,7 +8,7 @@ def test_pending_and_timeout_visible_without_candidate_text(client):
     response=client.get('/api/ordinary-reminders/diagnostics')
     assert response.status_code==200
     data=response.json()
-    assert data['counts']=={'pending':1} and not data['external_enabled']
+    assert data['counts']=={'pending':1} and data['scope']=='candidate_diagnostics'
     assert set(data['items'][0])=={'id','trigger_id','memory_id','state','error'}
     def timeout(_):
         raise TimeoutError('private exception must not appear')

@@ -54,5 +54,6 @@ def test_dispatcher_new_instance_does_not_resend(client, monkeypatch):
     assert dispatch_once(path, BotSender(synthetic=True)) == 'accepted'
     assert dispatch_once(path, BotSender(synthetic=True)) is None
     with connect(path) as db:
-        assert db.execute('SELECT attempts FROM notification_attempt').fetchone()[0] == 1
+        assert db.execute('SELECT count(*) FROM notification_record WHERE synthetic=1').fetchone()[0] == 1
+        assert db.execute('SELECT count(*) FROM notification_attempt').fetchone()[0] == 0
     assert len(calls) == 1

@@ -3,6 +3,7 @@ import argparse
 from getpass import getpass
 import os
 from pathlib import Path
+from datetime import datetime, timezone
 import tempfile
 
 import httpx
@@ -22,7 +23,7 @@ def main():
             api.post('/api/watches', json={'user_text':'通知测试'}).raise_for_status()
             data = {'account_ref':'synthetic', 'contact_ref':'synthetic', 'mode':'live', 'messages':[
                 {'conversation_id':'notification-test', 'source':{'adapter':'manual-json','id':'1','partition':'test'},
-                 'sender_role':'peer', 'event_time':'2026-10-27T12:00:00+08:00', 'text':'合成消息：通知测试', 'revision':1}]}
+                 'sender_role':'peer', 'event_time':datetime.now(timezone.utc).isoformat(), 'text':'合成消息：通知测试', 'revision':1}]}
             api.post('/api/import', json=data).raise_for_status()
             api.post('/api/import', json=data).raise_for_status()
             path = app.state.db_path
@@ -40,11 +41,11 @@ def main():
                     def sender(title, body):
                         print(f'本地预览（未联网）：{title}\n{body}')
                         return 'accepted'
-                result = deliver(path, ids[0], channel, sender)
-                duplicate = deliver(path, ids[0], channel, sender)
+                result = deliver(path, ids[0], channel, sender, synthetic=True)
+                duplicate = deliver(path, ids[0], channel, sender, synthetic=True)
             print(f'首次处理：{result}；重复处理：{duplicate}')
             api.post(f'/api/reminders/{ids[0]}/dismiss').raise_for_status()
-            assert deliver(path, ids[0], channel, sender) == 'skipped_inactive'
+            assert deliver(path, ids[0], channel, sender, synthetic=True) == 'skipped_inactive'
             print('重复导入只产生一条提醒；重复处理不再次发送；停用提醒不会发送。')
             print('手机显示状态：待人工确认。' if args.serverchan_test else '本地闭环通过；本次没有向微信发送消息。')
             return 0 if result == 'accepted' else 1

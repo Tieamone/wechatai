@@ -1,6 +1,7 @@
 """Explicitly started watch-notification dispatcher; no automatic startup."""
 import argparse
 from pathlib import Path
+from datetime import datetime, timezone
 import time
 
 from backend.bot_sender import BotSender
@@ -23,7 +24,7 @@ def seed_demo(directory):
             api.post('/api/watches', json={'user_text':'队列测试'}).raise_for_status()
         body = {'account_ref':'synthetic', 'contact_ref':'synthetic', 'mode':'live', 'messages':[
             {'conversation_id':'bot-queue-test', 'source':{'adapter':'manual-json','id':'1','partition':'test'},
-             'sender_role':'peer', 'event_time':'2026-10-27T12:00:00+08:00', 'text':'合成消息：队列测试', 'revision':1}]}
+             'sender_role':'peer', 'event_time':datetime.now(timezone.utc).isoformat(), 'text':'合成消息：队列测试', 'revision':1}]}
         for _ in range(2):
             api.post('/api/import', json=body).raise_for_status()
     return app.state.db_path
@@ -31,9 +32,9 @@ def seed_demo(directory):
 
 def dispatch_once(path, sender):
     # One per cycle. Crash/timeout reservations survive process restart.
-    ids = pending(path, CHANNEL)
+    ids = pending(path, CHANNEL, synthetic=sender.synthetic)
     if ids:
-        state = deliver(path, ids[0], CHANNEL, sender)
+        state = deliver(path, ids[0], CHANNEL, sender, synthetic=sender.synthetic)
     else:
         ids = pending_associations(path, CHANNEL)
         if not ids:

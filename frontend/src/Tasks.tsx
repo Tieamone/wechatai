@@ -1,3 +1,4 @@
+import {usePolling} from './usePolling';
 import {useState,useEffect} from 'react';
 import {Processing} from './Processing';
 type Row=Record<string,any>;
@@ -8,16 +9,7 @@ export function Tasks({api,run,busy,selected,onExtracted}:{api:(p:string,m?:stri
   const [request,setRequest]=useState<Row|null>(null);
   const [loaded,setLoaded]=useState(false);
   const [pollError,setPollError]=useState('');
-  useEffect(()=>{
-    let active=true;
-    let timer:ReturnType<typeof setTimeout>;
-    async function poll(){
-      try{const [i,w]=await Promise.all([api('initializations'),api('worker')]);if(active){setItems(i);setWorker(w);setLoaded(true);setPollError('')}}
-      catch{if(active)setPollError('任务进度刷新失败，当前显示上次数据。')}
-      finally{if(active)timer=setTimeout(poll,5000)}
-    }
-    void poll();return()=>{active=false;clearTimeout(timer)};
-  },[api]);
+  usePolling(api,['initializations','worker'],([i,w])=>{setItems(i);setWorker(w);setLoaded(true);setPollError('')},()=>setPollError('任务进度刷新失败，当前显示上次数据。'),5000);
   const hasRange=items.some(i=>i.state==='active'||i.state==='paused');
   const refresh=async()=>{setItems(await api('initializations'));setWorker(await api('worker'))};
   const labels:Record<string,string>={pending:'等待处理',running:'处理中',prepared:'准备完成（未提炼）',validated_model:'AI 提炼完成',validated_synthetic:'合成返回验证完成',failed:'失败',blocked_privacy:'隐私待处理',cancelled:'已取消',active:'启用',paused:'已暂停'};

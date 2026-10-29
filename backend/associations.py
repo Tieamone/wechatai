@@ -177,7 +177,7 @@ def router(path):
             counts={r['state']:r['n'] for r in db.execute('SELECT state,count(*) AS n FROM association GROUP BY state')}
             rows=[dict(r) for r in db.execute('SELECT id,trigger_id,memory_id,state,error FROM association ORDER BY id DESC LIMIT 100')]
             return {'counts':counts,'items':rows,'truncated':sum(counts.values())>len(rows),
-                    'external_enabled':False}
+                    'scope':'candidate_diagnostics'}
 
     @routes.get('')
     def listing():
@@ -192,7 +192,8 @@ def router(path):
                     continue
                 memory=db.execute('SELECT * FROM memory WHERE id=?',(row['memory_id'],)).fetchone()
                 trigger=db.execute('SELECT text,event_time FROM message WHERE id=?',(row['trigger_id'],)).fetchone()
-                cards.append({'id':row['id'],'origin':'model' if row['state']=='confirmed_model' else 'synthetic','memory':memory_card(db,memory),'trigger':dict(trigger)})
+                from .policy import card_status
+                cards.append({'notification':card_status(db,'ordinary',row['id']),'id':row['id'],'origin':'model' if row['state']=='confirmed_model' else 'synthetic','memory':memory_card(db,memory),'trigger':dict(trigger)})
             return cards
 
     @routes.post('/{candidate_id}/dismiss')

@@ -3,6 +3,12 @@ import threading
 import time
 
 from backend.worker import PreparationWorker
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolate_automatic(monkeypatch):
+    monkeypatch.setattr('backend.automatic.process_next',lambda *args,**kwargs:{'processed':False})
 
 
 def test_busy_database_retries_without_losing_worker(tmp_path, monkeypatch):
