@@ -11,6 +11,7 @@ def old_database(tmp_path):
     path=tmp_path/'memory.sqlite3'
     initialize(path)
     with connect(path) as db:
+        db.executescript('DROP TRIGGER job_message_insert; DROP TRIGGER deferred_cancel; DROP TRIGGER deferred_revision; DROP TRIGGER feedback_revision; DROP TABLE job_message; DROP TABLE usage_ledger; DROP TABLE feedback; DROP INDEX job_initialization; ')
         for name in ('notification_record','notification_policy','deferred_message','memory_review'):
             db.execute('DROP TABLE '+name)
         db.execute('PRAGMA user_version=17')
@@ -34,7 +35,7 @@ def test_upgrade_and_restore(tmp_path):
     shutil.copy2(files[0],restored)
     initialize(restored)
     with connect(restored) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==19
+        assert db.execute('PRAGMA user_version').fetchone()[0]==20
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
         assert db.execute('SELECT count(*) FROM conversation').fetchone()[0]==1
 

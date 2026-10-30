@@ -131,6 +131,13 @@ def memory_card(db, row):
     return card
 
 
+def record_feedback(db,memory_id,action):
+    import json
+    row=db.execute('SELECT version FROM memory WHERE id=?',(memory_id,)).fetchone()
+    evidence=[dict(r) for r in db.execute('SELECT message_id,message_revision,span_start,span_end FROM memory_evidence WHERE memory_id=?',(memory_id,))]
+    db.execute('INSERT INTO feedback(memory_id,memory_version,action,evidence_json) VALUES(?,?,?,?)',(memory_id,row['version'],action,json.dumps(evidence)))
+
+
 def router(path: Path):
     routes = APIRouter(prefix='/api/memories')
 
@@ -174,6 +181,7 @@ def router(path: Path):
                 raise HTTPException(409,'记忆已变化，请刷新后再核对')
             if db.execute('SELECT 1 FROM memory_evidence e JOIN message m ON m.id=e.message_id WHERE e.memory_id=? AND e.message_revision!=m.revision',(memory_id,)).fetchone():
                 raise HTTPException(409,'原文证据已变化，请先核对新版本')
+            record_feedback(db,memory_id,action)
             if action=='confirm':
                 db.execute('INSERT INTO memory_review(memory_id,confirmed_version) VALUES(?,?) ON CONFLICT(memory_id) DO UPDATE SET confirmed_version=excluded.confirmed_version,confirmed_at=CURRENT_TIMESTAMP',(memory_id,row['version']))
             else:
@@ -189,6 +197,7 @@ def router(path: Path):
                 raise HTTPException(404, '记忆不存在')
             if memory['status'] == 'incorrect':
                 return {'ok': True}
+            record_feedback(db,memory_id,'incorrect')
             suppress(db,memory_id,body.reason)
         return {'ok': True}
 

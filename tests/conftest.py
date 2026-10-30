@@ -8,7 +8,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def historical_fixture_policy(request, monkeypatch):
-    if request.path.name.startswith('test_p0'):
+    if request.path.name.startswith(('test_p0','test_p1')):
         return
     monkeypatch.setattr('backend.policy.age_reason', lambda *a, **k: None)
     monkeypatch.setattr('backend.policy.quiet', lambda *a, **k: False)

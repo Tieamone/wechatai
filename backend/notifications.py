@@ -11,13 +11,15 @@ TITLE = '聊天记忆助手：有一条待查看提醒'
 BODY = '请在电脑工作台查看详情。本通知不包含聊天正文。'
 TEST_TITLE = '聊天记忆助手：合成通知测试'
 TEST_BODY = '这是一条测试消息，不是真实聊天提醒。请检查手机通知栏。'
+WATCH_VALID = "r.status='active' AND w.enabled=1 AND w.revision=r.watch_revision AND (w.source_memory_id IS NULL OR m.status='active')"
 
 
 def pending(path, channel, *, synthetic=False):
     with connect(path) as db:
-        return [r[0] for r in db.execute("""SELECT r.id FROM reminder r
+        return [r[0] for r in db.execute(f"""SELECT r.id FROM reminder r
+            JOIN watch_item w ON w.id=r.watch_id LEFT JOIN memory m ON m.id=w.source_memory_id
             LEFT JOIN notification_attempt n ON n.reminder_id=r.id AND n.channel=?
-            WHERE r.status='active' AND (n.reminder_id IS NULL OR ?)
+            WHERE {WATCH_VALID} AND (n.reminder_id IS NULL OR ?)
             AND NOT EXISTS(SELECT 1 FROM notification_record x WHERE x.kind='watch' AND x.item_id=r.id AND x.channel=? AND x.synthetic=?)
             ORDER BY r.id""", (channel,synthetic,channel,synthetic))]
 
@@ -42,9 +44,8 @@ def _deliver(path, kind, item_id, channel, sender, *, synthetic=False, retry_rej
             valid=db.execute("SELECT 1 FROM association WHERE id=? AND state='confirmed_model' AND (SELECT enabled FROM auto_control WHERE id=1)=1",(item_id,)).fetchone()
             prior=db.execute('SELECT state FROM association_notification WHERE association_id=? AND channel=?',(item_id,channel)).fetchone()
         else:
-            valid=db.execute("""SELECT 1 FROM reminder r JOIN watch_item w ON w.id=r.watch_id
-                LEFT JOIN memory m ON m.id=w.source_memory_id WHERE r.id=? AND r.status='active'
-                AND w.enabled=1 AND w.revision=r.watch_revision AND (w.source_memory_id IS NULL OR m.status='active')""",(item_id,)).fetchone()
+            valid=db.execute(f"""SELECT 1 FROM reminder r JOIN watch_item w ON w.id=r.watch_id
+                LEFT JOIN memory m ON m.id=w.source_memory_id WHERE r.id=? AND {WATCH_VALID}""",(item_id,)).fetchone()
             prior=db.execute('SELECT state FROM notification_attempt WHERE reminder_id=? AND channel=?',(item_id,channel)).fetchone()
         if not valid:return 'skipped_inactive'
         if not synthetic and prior and not (retry_rejected and prior['state']=='rejected'):

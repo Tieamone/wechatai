@@ -4,6 +4,7 @@ import ctypes
 from ctypes import wintypes
 import json
 import threading
+import time
 from urllib.parse import urlsplit
 
 import httpx
@@ -87,15 +88,18 @@ def save(directory, body):
 
 
 def complete(config, system, data):
+    from .usage import trace, mark_sent
     key = protect(base64.b64decode(config['key_encrypted']), decrypt=True).decode()
     try:
         with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
             with client.stream('POST', config['base_url']+'/chat/completions',
+                               extensions={'trace':trace},
                                headers={'Authorization':'Bearer '+key},
                                json={'model':config['model'], 'stream':False, 'max_tokens':4096,
                                      'response_format':{'type':'json_object'},
                                      'messages':[{'role':'system','content':system},
                                                  {'role':'user','content':json.dumps(data, ensure_ascii=False)}]}) as response:
+                mark_sent()
                 if response.status_code != 200:
                     raise HTTPException(502, f'模型接口返回 HTTP {response.status_code}，请检查地址、密钥、模型和余额')
                 raw = bytearray()
@@ -103,7 +107,10 @@ def complete(config, system, data):
                     raw.extend(chunk)
                     if len(raw) > 256000:
                         raise ValueError('too large')
-                choice = json.loads(raw)['choices'][0]
+                payload = json.loads(raw)
+                from .usage import settle
+                settle(payload.get('usage'))
+                choice = payload['choices'][0]
                 if choice.get('finish_reason') != 'stop' or not isinstance(choice['message']['content'], str):
                     raise ValueError('incomplete')
                 return choice['message']['content']
@@ -116,7 +123,12 @@ def complete(config, system, data):
 def extract_job(path, job_id, config, *, sender=None):
     request = issue_request(path, job_id, claim=True, provider='compatible')
     try:
-        response = (sender or complete)(config, request['system']+'\nJSON schema:\n'+json.dumps(request['response_schema']), request['data'])
+        with connect(path) as db:
+            if not db.execute("SELECT 1 FROM job WHERE id=? AND state='extracting' AND owner=? AND lease_until>?",(job_id,request['request_id'],time.time())).fetchone():
+                raise HTTPException(409,'提炼任务已取消或租约失效，未发送请求')
+        from .usage import invoke
+        send=sender or (lambda c,s,d:invoke(path,c,s,d,kind='manual',sender=complete))
+        response = send(config, request['system']+'\nJSON schema:\n'+json.dumps(request['response_schema']), request['data'])
         return commit_response(path, request['request_id'], response)
     except Exception:
         with connect(path) as db:
@@ -152,7 +164,8 @@ def router(path, *, allowed=True):
 
     @routes.post('/test')
     def test():
-        result = complete(config_for_send(), 'Return JSON only: {"ok":true}', {'test':'connection only, no chat data'})
+        from .usage import invoke
+        result = invoke(path,config_for_send(), 'Return JSON only: {"ok":true}', {'test':'connection only, no chat data'},kind='connection_test',sender=complete)
         try:
             valid = json.loads(result) == {'ok':True}
         except ValueError:

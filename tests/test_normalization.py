@@ -35,7 +35,7 @@ def test_does_not_infer_missing_country_or_digits(client):
 def test_old_conflicting_tokens_survive_upgrade_but_block(client):
     path=client.app.state.db_path
     with connect(path) as db:
-        db.executescript('DROP TABLE notification_record; DROP TABLE notification_policy; DROP TABLE deferred_message; DROP TABLE mapping_resolution; DROP TABLE property_evidence; DROP TABLE mapping_policy; PRAGMA user_version=12;')
+        db.executescript('DROP TRIGGER job_message_insert; DROP TRIGGER deferred_cancel; DROP TRIGGER deferred_revision; DROP TRIGGER feedback_revision; DROP TABLE job_message; DROP TABLE usage_ledger; DROP TABLE feedback; DROP INDEX job_initialization; DROP TABLE notification_record; DROP TABLE notification_policy; DROP TABLE deferred_message; DROP TABLE mapping_resolution; DROP TABLE property_evidence; DROP TABLE mapping_policy; PRAGMA user_version=12;')
         db.execute("INSERT INTO entity_value(kind,value,token) VALUES('PHONE','13800138000','[PHONE_aa]')")
         db.execute("INSERT INTO entity_value(kind,value,token) VALUES('PHONE','+86 13800138000','[PHONE_bb]')")
     initialize(path)

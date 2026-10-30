@@ -73,5 +73,5 @@ def test_migrate_v1_and_correction_survives_restart(tmp_path):
                 assert c.get('/api/memories').json() == []
                 assert c.post('/api/memories', json=draft()).status_code == 409
     db = sqlite3.connect(tmp_path / 'memory.sqlite3')
-    assert db.execute('PRAGMA user_version').fetchone()[0] == 19
+    assert db.execute('PRAGMA user_version').fetchone()[0] == 20
     db.close()

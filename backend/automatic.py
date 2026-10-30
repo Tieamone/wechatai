@@ -44,24 +44,28 @@ def enqueue(db, trigger_id):
 
 
 def used(db):
-    return db.execute('SELECT count(*) FROM auto_call WHERE at>?',(time.time()-86400,)).fetchone()[0]
+    return db.execute("SELECT count(*) FROM usage_ledger WHERE kind='automatic' AND state!='released' AND at>?",(time.time()-86400,)).fetchone()[0]
 
 
 def invoke(path, _config, system, data):
     config = ai_settings.load(path.parent)
     if not config.get('enabled') or not config.get('key_encrypted'):
         raise HTTPException(409,'模型未启用')
-    with connect(path) as db:
-        db.execute('BEGIN IMMEDIATE')
-        control = db.execute('SELECT * FROM auto_control WHERE id=1').fetchone()
-        if not control['enabled'] or used(db)>=control['daily_limit']:
-            raise HTTPException(409,'自动处理已暂停或达到调用上限')
-        db.execute('INSERT INTO auto_call(at) VALUES(?)',(time.time(),))
-    return ai_settings.complete(config,system,data)
+    from .usage import invoke as accounted
+    return accounted(path,config,system,data,kind='automatic',sender=ai_settings.complete)
 
 
 def process_next(path, *, should_stop=lambda:False):
     config = ai_settings.load(path.parent)
+    # Read-only fast path: an idle worker must not compete with ingestion writers.
+    with connect(path) as db:
+        limits=policy.settings(db)
+        expired=any(policy.age_reason(r['event_utc'],time.time(),limits,sending=True) for r in db.execute("SELECT m.event_utc FROM auto_message a JOIN message m ON m.id=a.trigger_id WHERE a.state='pending'"))
+        interrupted=db.execute("SELECT 1 FROM auto_message WHERE state='processing' AND lease_until<? LIMIT 1",(time.time(),)).fetchone()
+        control=db.execute('SELECT * FROM auto_control WHERE id=1').fetchone()
+        ready=(config.get('enabled') and config.get('key_encrypted') and control['enabled'] and used(db)<control['daily_limit'] and db.execute("SELECT 1 FROM auto_message a JOIN job j ON j.id=a.job_id WHERE a.state='pending' AND a.ready_at<=? AND j.state NOT IN ('pending','running') LIMIT 1",(time.time(),)).fetchone())
+        if not (expired or interrupted or ready):
+            return {'processed':False}
     with connect(path) as db:
         db.execute('BEGIN IMMEDIATE')
         control = db.execute('SELECT * FROM auto_control WHERE id=1').fetchone()
@@ -115,20 +119,13 @@ def process_next(path, *, should_stop=lambda:False):
 
 
 def deferred_status(db):
-    import json
-    # Cancelled ranges can be selected again; an assigned range is not completion.
-    db.execute("UPDATE deferred_message SET initialization_id=NULL WHERE initialization_id IN (SELECT id FROM initialization WHERE state='cancelled')")
-    rows=db.execute('SELECT d.*,m.revision FROM deferred_message d JOIN message m ON m.id=d.message_id').fetchall()
-    states={}
-    for init in {r['initialization_id'] for r in rows if r['initialization_id'] is not None}:
-        for job in db.execute('SELECT input_json,state FROM job WHERE initialization_id=?',(init,)):
-            for item in json.loads(job['input_json'])['messages']:
-                states.setdefault((init,item['id'],item['revision']),set()).add(job['state'])
+    rows=db.execute("""SELECT CASE
+      WHEN d.initialization_id IS NULL THEN 'pending'
+      WHEN EXISTS(SELECT 1 FROM job_message x JOIN job j ON j.id=x.job_id WHERE j.initialization_id=d.initialization_id AND x.message_id=d.message_id AND x.revision=d.message_revision)
+       AND NOT EXISTS(SELECT 1 FROM job_message x JOIN job j ON j.id=x.job_id WHERE j.initialization_id=d.initialization_id AND x.message_id=d.message_id AND x.revision=d.message_revision AND j.state!='validated_model') THEN 'completed'
+      ELSE 'assigned' END AS state,count(*) AS n FROM deferred_message d GROUP BY state""").fetchall()
     counts={'pending':0,'assigned':0,'completed':0}
-    for row in rows:
-        complete=states.get((row['initialization_id'],row['message_id'],row['revision']))=={'validated_model'}
-        key='completed' if complete else 'pending' if row['initialization_id'] is None else 'assigned'
-        counts[key]+=1
+    counts.update({r['state']:r['n'] for r in rows})
     return counts
 
 
