@@ -42,6 +42,9 @@ try{
   assert.deepEqual(requests,[]);
   await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
   await expect.poll(()=>requests.includes('/api/status')).toBe(true);
+  await page.route('**/api/status',r=>r.fulfill({status:401,json:{detail:'expired'}}));
+  await expect(page.getByLabel('会话令牌')).toBeVisible({timeout:10000});
+  await expect(page.getByRole('alert')).toContainText('登录已失效');
   assert.deepEqual(errors,[]);
   console.log('P0 browser PASS: one-time login, history replacement, refresh, new tab, settings, module/tab polling');
 }finally{await browser.close()}

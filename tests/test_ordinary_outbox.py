@@ -56,7 +56,7 @@ def test_upgrade_seeds_existing_confirmation_once(client):
     judge_next(path,lambda _:'{"confirmed":true}')
     # Recreate the prior schema, retaining the real confirmed candidate.
     with connect(path) as db:
-        db.executescript('DROP TABLE notification_record; DROP TABLE notification_policy; DROP TABLE deferred_message; DROP TRIGGER association_published; DROP TABLE ordinary_outbox; DROP TABLE mapping_resolution; DROP TABLE property_evidence; DROP TABLE person_property; DROP TABLE person; DROP TABLE mapping_policy; PRAGMA user_version=10;')
+        db.executescript('DROP TRIGGER job_message_insert; DROP TRIGGER deferred_cancel; DROP TRIGGER deferred_revision; DROP TRIGGER feedback_revision; DROP TABLE job_message; DROP TABLE usage_ledger; DROP TABLE feedback; DROP INDEX job_initialization; DROP TABLE notification_record; DROP TABLE notification_policy; DROP TABLE deferred_message; DROP TRIGGER association_published; DROP TABLE ordinary_outbox; DROP TABLE mapping_resolution; DROP TABLE property_evidence; DROP TABLE person_property; DROP TABLE person; DROP TABLE mapping_policy; PRAGMA user_version=10;')
     initialize(path)
     initialize(path)
     assert read(path)['items']==[{'id':1,'status':'confirmed_synthetic','revision':1}]

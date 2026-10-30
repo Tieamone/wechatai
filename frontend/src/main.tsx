@@ -53,7 +53,7 @@ function App() {
   const api=useCallback(async (path:string,method='GET',body?:unknown,signal?:AbortSignal) => {
     const res=await fetch('/api/'+path,{method,signal,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
     const data=await res.json();
-    if(res.status===401){storeToken('');setToken('');setConnected(false)}
+    if(res.status===401){storeToken('');setToken('');setConnected(false);setError('登录已失效，请重新连接')}
     if(!res.ok) throw new Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail));
     return data;
   },[token]);

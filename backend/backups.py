@@ -3,11 +3,21 @@ import os
 import shutil
 import sqlite3
 import uuid
+import json
 from contextlib import ExitStack, contextmanager, closing
 from datetime import datetime, timezone
 from pathlib import Path
 
 PREFIX = 'migration-auto-'
+
+
+def record_failure(path, reason):
+    directory=path.parent/'backups'
+    try:
+        directory.mkdir(exist_ok=True)
+        (directory/'last-failure.json').write_text(json.dumps({'reason':reason,'at':datetime.now(timezone.utc).isoformat()},ensure_ascii=False),encoding='utf-8')
+    except OSError:
+        pass  # The console remains available when the disk cannot be written.
 
 
 @contextmanager
@@ -54,5 +64,7 @@ def prune(path):
 
 def status(path):
     files = sorted((path.parent/'backups').glob(PREFIX+'*.sqlite3'), reverse=True)
+    try:failure=json.loads((path.parent/'backups/last-failure.json').read_text(encoding='utf-8'))
+    except (OSError,ValueError):failure=None
     return {'count':len(files), 'latest':files[0].name if files else None,
-            'retention':5, 'plaintext':True}
+            'retention':5, 'plaintext':True,'last_failure':failure}
