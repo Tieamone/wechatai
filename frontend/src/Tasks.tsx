@@ -21,7 +21,7 @@ export function Tasks({api,run,busy,selected,onExtracted}:{api:(p:string,m?:stri
     <button disabled={busy||!loaded||hasRange||selected.length===0} onClick={()=>run(async()=>{await api('initializations','POST',{mode:'batch',message_ids:selected.map(m=>m.id)});await refresh()})}>创建所选消息分批范围</button>
     <button disabled={busy} className="secondary" onClick={()=>run(async()=>{await api('initializations/process-next','POST');await refresh()})}>处理下一窗口</button>
     <button disabled={busy} className="secondary" onClick={()=>run(refresh)}>刷新任务</button>
-    <p>本地准备执行器：{worker.error==='database_busy_retrying'?'数据库暂忙，正在自动重试':worker.error?'异常停止，可点击恢复':worker.running?'运行中':'未运行或尚未刷新'}。历史任务只自动准备窗口；新消息的自动模型调用由独立开关控制。进度每 5 秒刷新。</p>
+    <p>本地准备执行器：{worker.error==='database_busy_retrying'?'数据库暂忙，正在自动重试':worker.error?'异常停止，可点击恢复':worker.running?'运行中':'未运行或尚未刷新'}。历史默认只准备窗口；明确启动的有预算批量会在后台提炼，新消息自动调用由独立开关控制。进度每 5 秒刷新。</p>
     {loaded&&!worker.running&&<button disabled={busy} onClick={()=>run(async()=>{await api('worker/restart','POST');await refresh()})}>恢复后台准备</button>}
     {hasRange&&<p className="muted">已有初始化范围，无需重复创建。可以继续处理或暂停；只有需要重新选择范围时才取消。</p>}
     {pollError&&<p role="alert">{pollError}</p>}
