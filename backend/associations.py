@@ -4,6 +4,7 @@ import secrets
 import time
 import json
 from datetime import datetime, timedelta
+from functools import lru_cache
 
 from fastapi import APIRouter
 from pydantic import StrictBool
@@ -13,7 +14,7 @@ from .model_contract import digest, mapping_hash
 from .models import StrictModel
 from .privacy import preview
 from .store import connect
-from .entity_context import mention_candidates
+from .entity_context import mention_candidates,prepare_mentions
 
 
 class Judgment(StrictModel):
@@ -45,30 +46,48 @@ def terms(text):
     return result
 
 
-def evidence_before(db, memory_id, trigger_time):
-    rows=db.execute('SELECT m.event_utc,m.revision,e.message_revision FROM memory_evidence e JOIN message m ON m.id=e.message_id WHERE e.memory_id=?',(memory_id,)).fetchall()
+@lru_cache(maxsize=32768)
+def memory_terms(memory_id, version, summary):
+    return frozenset(terms(summary))
+
+
+def evidence_before(db, memory_id, trigger_time, *, evidence=None):
+    rows=(db.execute('SELECT m.event_utc,m.revision,e.message_revision FROM memory_evidence e JOIN message m ON m.id=e.message_id WHERE e.memory_id=?',(memory_id,)).fetchall()
+          if evidence is None else evidence)
     return bool(trigger_time and rows) and all(r['event_utc'] and r['event_utc']<trigger_time and r['revision']==r['message_revision'] for r in rows)
 
 
-def enqueue_candidates(db, trigger_id):
+def rank_candidates(db, trigger_id):
+    """Read-only legacy top-10 recall; scores are lexical overlap, not relevance."""
     trigger=db.execute('SELECT * FROM message WHERE id=?',(trigger_id,)).fetchone()
     if trigger['sender_role']!='peer' or trigger['type']!='text' or not trigger['event_utc']:
-        return
+        return []
     recent=recent_messages(db,trigger)
     query=terms(' '.join(r['text'] for r in recent if r['type']=='text'))
-    current_people={r['person_token'] for r in mention_candidates(db,[(r['text'],r['event_utc']) for r in recent if r['type']=='text'],recent[0]['event_utc'])}
+    prepared=prepare_mentions(db,recent[0]['event_utc'])
+    current_people={r['person_token'] for r in mention_candidates(db,[(r['text'],r['event_utc']) for r in recent if r['type']=='text'],recent[0]['event_utc'],prepared=prepared)}
+    evidence_by_memory={}
+    for row in db.execute("SELECT e.memory_id,m.text,m.event_utc,m.revision,e.message_revision FROM memory_evidence e JOIN message m ON m.id=e.message_id JOIN memory h ON h.id=e.memory_id WHERE h.status='active'"):
+        evidence_by_memory.setdefault(row['memory_id'],[]).append(row)
     ranked=[]
     for memory in db.execute("SELECT * FROM memory WHERE status='active'").fetchall():
-        score=len(query & terms(memory['summary']))
+        score=len(query & memory_terms(memory['id'],memory['version'],memory['summary']))
+        evidence=evidence_by_memory.get(memory['id'],[])
         if current_people:
-            history=[(r['text'],r['event_utc']) for r in db.execute('SELECT m.* FROM memory_evidence e JOIN message m ON m.id=e.message_id WHERE memory_id=?',(memory['id'],))]
-            history_people={r['person_token'] for r in mention_candidates(db,history,recent[0]['event_utc'])}
+            history=[(r['text'],r['event_utc']) for r in evidence]
+            history_people={r['person_token'] for r in mention_candidates(db,history,recent[0]['event_utc'],prepared=prepared)}
             score+=len(current_people & history_people)
-        if score and evidence_before(db,memory['id'],recent[0]['event_utc']):
+        if score and evidence_before(db,memory['id'],recent[0]['event_utc'],evidence=evidence):
             ranked.append((score,memory))
-    for _,memory in sorted(ranked,key=lambda pair:(-pair[0],-pair[1]['id']))[:10]:
+    return [{'trigger_revision':trigger['revision'],'memory_id':memory['id'],
+             'memory_version':memory['version'],'score':score}
+            for score,memory in sorted(ranked,key=lambda pair:(-pair[0],-pair[1]['id']))[:10]]
+
+
+def enqueue_candidates(db, trigger_id):
+    for candidate in rank_candidates(db, trigger_id):
         db.execute('INSERT OR IGNORE INTO association(trigger_id,trigger_revision,memory_id,memory_version) VALUES(?,?,?,?)',
-                   (trigger_id,trigger['revision'],memory['id'],memory['version']))
+                   (trigger_id,candidate['trigger_revision'],candidate['memory_id'],candidate['memory_version']))
 
 
 def context(db, candidate):
