@@ -3,7 +3,7 @@ import {useEffect,useState} from 'react';
 import {Processing} from './Processing';
 
 const labels:Record<string,string>={expired:'已过期，待手动提炼',pending:'等待处理',processing:'正在提炼与判断',done:'已完成',partial:'提炼完成，部分关联未完成',failed:'处理失败，未自动重试',blocked_privacy:'隐私待处理',superseded:'已由后续消息替代或已暂停'};
-const reasons:Record<string,string>={expired:'已超过处理有效期',future_time:'消息时间明显超前',unknown_time:'消息时间未知',model_timeout:'模型超时',model_call_failed:'模型请求或返回校验失败',newer_context:'收到后续消息',disabled:'自动处理已暂停',call_limit:'已达到调用上限',judgment_incomplete:'关联判断未完成，请查看普通关联处理状态',interrupted:'上次运行中断，避免重复计费未重试',blocked_privacy:'窗口含隐私疑点',failed:'窗口准备失败',cancelled:'窗口已取消'};
+const reasons:Record<string,string>={budget_limit:'预算不足，等待后续额度；已完成部分不重发',expired:'已超过处理有效期',future_time:'消息时间明显超前',unknown_time:'消息时间未知',model_timeout:'模型超时',model_call_failed:'模型请求或返回校验失败',newer_context:'收到后续消息',disabled:'自动处理已暂停',call_limit:'已达到调用上限',judgment_incomplete:'关联判断未完成，请查看普通关联处理状态',interrupted:'上次运行中断，避免重复计费未重试',blocked_privacy:'窗口含隐私疑点',failed:'窗口准备失败',cancelled:'窗口已取消'};
 export function Automatic({api}:{api:(p:string,m?:string,b?:unknown)=>Promise<any>}){
   const [data,setData]=useState<any>(null);
   const [limit,setLimit]=useState(200);

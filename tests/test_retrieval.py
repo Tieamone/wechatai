@@ -82,3 +82,23 @@ def test_memory_word_cache_tracks_version_and_content():
     assert memory_terms.cache_info().hits==1
     assert memory_terms(1,2,'周末')=={'周末'}
     assert memory_terms(1,1,'运动')=={'运动'}  # Same ID/version in a different fixture database.
+
+
+def test_mentions_validity_and_unavailable_evidence_match_legacy(tmp_path):
+    from backend.entity_context import prepare_mentions,mention_candidates
+    from legacy_entity_context import mention_candidates as legacy_mentions
+    path=tmp_path/'memory.sqlite3';initialize(path)
+    with connect(path) as db:
+        db.execute("INSERT INTO conversation VALUES('fixture','fixture','fixture')")
+        for mid,instant in [(1,'2026-01-01T00:00:00+00:00'),(2,'2026-03-01T00:00:00+00:00')]:
+            db.execute("INSERT INTO message(id,conversation_id,adapter,source_id,partition,sender_role,text,event_utc,type,revision) VALUES(?,'fixture','test',?,'test','peer','小陈',?,'text',1)",(mid,str(mid),instant))
+        for pid in range(1,4):
+            db.execute('INSERT INTO person VALUES(?,?,?)',(pid,'fixture',f'[PERSON_{pid}]'))
+            db.execute("INSERT INTO person_property(id,person_id,kind,value,confirmation_note,valid_from,valid_to) VALUES(?,?,'name','小陈','fixture','2026-01-10T00:00:00+00:00','2026-02-10T00:00:00+00:00')",(pid,pid))
+            db.execute('INSERT INTO property_evidence VALUES(?,?,?,?,?)',(pid,2 if pid==2 else 1,2 if pid==3 else 1,0,2))
+        cutoff='2026-02-01T00:00:00+00:00'
+        sources=[('小陈','2026-01-09T00:00:00+00:00'),('小陈','2026-01-10T00:00:00+00:00'),('小陈','2026-02-10T00:00:00+00:00')]
+        prepared=prepare_mentions(db,cutoff)
+        actual=mention_candidates(db,sources,cutoff,prepared=prepared)
+        assert actual==legacy_mentions(db,sources,cutoff)
+        assert [(r['source_index'],r['person_token']) for r in actual]==[(1,'[PERSON_1]')]

@@ -130,9 +130,10 @@ def extract_job(path, job_id, config, *, sender=None):
         send=sender or (lambda c,s,d:invoke(path,c,s,d,kind='manual',sender=complete))
         response = send(config, request['system']+'\nJSON schema:\n'+json.dumps(request['response_schema']), request['data'])
         return commit_response(path, request['request_id'], response)
-    except Exception:
+    except Exception as error:
         with connect(path) as db:
-            db.execute("UPDATE job SET state='failed',error='model_call_failed',owner=NULL,lease_until=NULL WHERE id=? AND state='extracting' AND owner=?", (job_id, request['request_id']))
+            limited=isinstance(error,HTTPException) and error.status_code==429
+            db.execute("UPDATE job SET state=?,error=?,owner=NULL,lease_until=NULL WHERE id=? AND state='extracting' AND owner=?", ('prepared' if limited else 'failed','budget_limit' if limited else 'model_call_failed',job_id, request['request_id']))
             db.execute("UPDATE model_request SET state='failed' WHERE id=? AND state='issued'", (request['request_id'],))
         raise
 

@@ -208,7 +208,7 @@ def router(path: Path):
                 db.execute('UPDATE initialization SET state=? WHERE id=?', (state, init_id))
                 db.execute("UPDATE job SET state=?,owner=NULL,lease_until=NULL,result_json=NULL WHERE initialization_id=? AND state IN ('running','extracting')", ('cancelled' if state == 'cancelled' else 'pending', init_id))
                 if state == 'cancelled':
-                    db.execute("UPDATE job SET state='cancelled',result_json=NULL WHERE initialization_id=? AND state!='cancelled'", (init_id,))
+                    db.execute("UPDATE job SET state='cancelled',result_json=NULL WHERE initialization_id=? AND state NOT IN ('cancelled','validated_model')", (init_id,))
         return {'ok': True}
 
     return routes

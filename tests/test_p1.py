@@ -1,3 +1,4 @@
+from schema_helpers import remove_v21
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -118,6 +119,7 @@ def test_startup_failure_is_chinese_and_saved(tmp_path,monkeypatch,capsys):
 def test_legacy_calls_migrate_into_single_counter(tmp_path):
     path=tmp_path/'memory.sqlite3';initialize(path)
     with connect(path) as db:
+        remove_v21(db)
         db.executescript('DROP TRIGGER job_message_insert; DROP TRIGGER deferred_cancel; DROP TRIGGER deferred_revision; DROP TRIGGER feedback_revision; DROP TABLE job_message; DROP TABLE usage_ledger; DROP TABLE feedback; DROP INDEX job_initialization; PRAGMA user_version=19;')
         db.execute('INSERT INTO auto_call(at) VALUES(?)',(time.time(),))
     initialize(path)

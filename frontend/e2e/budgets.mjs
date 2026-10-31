@@ -1,0 +1,53 @@
+import {chromium,expect} from '@playwright/test';
+import assert from 'node:assert/strict';
+const browser=await chromium.launch();
+const page=await browser.newPage();
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+const base='http://127.0.0.1:8765';
+async function api(path,body){const response=await page.request.fetch(base+'/api/'+path,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer browser-test-only'},data:body});assert.ok(response.ok(),await response.text());return response.json()}
+async function go(route){await page.evaluate(r=>{location.hash='/'+r},route)}
+try{
+  await page.goto(base);
+  await page.getByLabel('会话令牌').fill('browser-test-only');await page.getByRole('button',{name:'打开工作台'}).click();
+  await expect(page.getByRole('heading',{name:'工作台概况'})).toBeVisible();
+  await go('settings/model');
+  await page.getByLabel('API 基础地址',{exact:true}).fill('https://synthetic.invalid/v1');
+  await page.getByLabel('模型名称',{exact:true}).fill('synthetic');
+  await page.getByLabel('API Key',{exact:true}).fill('synthetic-key');
+  await page.getByLabel('允许模型调用',{exact:false}).check();
+  await page.getByRole('button',{name:'保存模型配置'}).click();
+  await expect(page.getByText('配置已保存；没有发送聊天。')).toBeVisible();
+  await go('settings/budgets');
+  await expect(page.getByLabel('24 小时金额上限')).toBeDisabled();
+  await page.getByLabel('启用滚动 24 小时硬预算').check();
+  await page.getByLabel('24 小时 Token 上限').fill('50000');
+  await page.getByRole('button',{name:'将单价绑定当前模型'}).click();
+  await page.getByLabel('输入单价',{exact:true}).fill('1');
+  await page.getByLabel('输出单价',{exact:true}).fill('2');
+  await page.getByLabel('24 小时金额上限').fill('0.1');
+  await page.getByRole('button',{name:'保存预算设置'}).click();
+  await expect(page.getByText('预算已保存',{exact:true})).toBeVisible();
+  await api('import',{account_ref:'synthetic',contact_ref:'synthetic',mode:'history',messages:Array.from({length:30},(_,i)=>({conversation_id:'synthetic',source:{adapter:'test',id:String(i),partition:'test'},sender_role:'peer',event_time:'2026-01-01T00:00:00+00:00',text:'合成闲聊'+i,revision:1}))});
+  const init=await api('initializations',{mode:'full'});
+  await go('tasks/history');
+  await expect(page.getByLabel('批量历史范围').locator('option')).toHaveCount(2,{timeout:10000});
+  await page.getByLabel('批量历史范围').selectOption(String(init.id));
+  await page.getByLabel('批量窗口数').fill('2');
+  await page.getByLabel('本批 Token 上限').fill('20000');
+  await expect(page.getByLabel('本批金额上限')).toBeEnabled();
+  await page.getByLabel('本批金额上限').fill('0.1');
+  await page.getByRole('button',{name:'启动有预算的批量提炼'}).click();
+  await expect.poll(async()=>{const rows=await api('batches');return rows[0]?.state},{timeout:15000}).toBe('completed');
+  const first=(await api('batches'))[0];assert.equal(first.counts.done,2);assert.equal(first.usage.tokens,60);assert.equal(first.usage.amount,80);
+  await page.getByLabel('批量窗口数').fill('1');
+  await page.getByLabel('本批 Token 上限').fill('4096');
+  await page.getByRole('button',{name:'启动有预算的批量提炼'}).click();
+  await expect.poll(async()=>{const rows=await api('batches');return rows[0]?.state}).toBe('paused');
+  const stopped=(await api('batches'))[0];assert.equal(stopped.reason,'budget_limit');assert.equal(stopped.usage.calls,0);
+  await api(`batches/${stopped.id}/control`,{action:'cancel'});
+  await page.reload();
+  await expect(page.getByRole('heading',{name:'有预算的批量提炼'})).toBeVisible();
+  assert.equal((await api('batches'))[0].state,'cancelled');
+  assert.deepEqual(errors,[]);
+  console.log('PASS: budget settings, disabled unpriced amount mode, persistent batch limits, actual usage settlement and zero-send exhaustion');
+}finally{await browser.close()}

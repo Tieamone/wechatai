@@ -110,7 +110,12 @@ def process_next(path, *, should_stop=lambda:False):
             # At most three candidate calls per window; do not leave an unbounded backlog.
             db.execute("UPDATE association SET state='rejected',error='candidate_limit' WHERE trigger_id=? AND state='pending'",(row['trigger_id'],))
     except HTTPException as exc:
-        state,error='failed',('model_timeout' if exc.status_code==504 else 'model_call_failed')
+        if exc.status_code==429:
+            with connect(path) as db:
+                waiting=db.execute('SELECT state FROM job WHERE id=?',(row['job_id'],)).fetchone()[0]=='prepared'
+                if waiting:db.execute('UPDATE auto_message SET ready_at=? WHERE trigger_id=?',(time.time()+60,row['trigger_id']))
+            state,error=('pending' if waiting else 'partial'),'budget_limit'
+        else:state,error='failed',('model_timeout' if exc.status_code==504 else 'model_call_failed')
     except Exception:
         state,error='failed','model_call_failed'
     with connect(path) as db:

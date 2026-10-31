@@ -1,3 +1,4 @@
+import {BatchControls} from './BatchControls';
 import {usePolling} from './usePolling';
 import {useState,useEffect} from 'react';
 import {Processing} from './Processing';
@@ -12,7 +13,8 @@ export function Tasks({api,run,busy,selected,onExtracted}:{api:(p:string,m?:stri
   usePolling(api,['initializations','worker'],([i,w])=>{setItems(i);setWorker(w);setLoaded(true);setPollError('')},()=>setPollError('任务进度刷新失败，当前显示上次数据。'),5000);
   const hasRange=items.some(i=>i.state==='active'||i.state==='paused');
   const refresh=async()=>{setItems(await api('initializations'));setWorker(await api('worker'))};
-  const labels:Record<string,string>={pending:'等待处理',running:'处理中',prepared:'准备完成（未提炼）',validated_model:'AI 提炼完成',validated_synthetic:'合成返回验证完成',failed:'失败',blocked_privacy:'隐私待处理',cancelled:'已取消',active:'启用',paused:'已暂停'};
+  const labels:Record<string,string>={extracting:'正在提炼',pending:'等待处理',running:'处理中',prepared:'准备完成（未提炼）',validated_model:'AI 提炼完成',validated_synthetic:'合成返回验证完成',failed:'失败',blocked_privacy:'隐私待处理',cancelled:'已取消',active:'启用',paused:'已暂停'};
+  const errorLabels:Record<string,string>={budget_limit:'预算不足，尚未发送；请核对预算设置',model_call_failed:'模型调用或返回失败，请核对后再重试',interrupted:'上次运行中断，未自动重试'};
   const warningLabels:Record<string,string>={conversation_has_unprocessed_nontext:'会话含未处理的图片、语音等非文字内容',time_gap_over_30_minutes:'窗口内消息间隔超过 30 分钟',bounded_or_selected_history:'窗口或选择范围有限'};
   return <section><h2>历史初始化任务</h2><p>固定当前历史范围并准备上下文。每个窗口最多 12 条、重叠 2 条；准备完成不等于已提炼。先配置 AI，预览输入后按窗口手动提炼。</p>
     <button disabled={busy||!loaded||hasRange} onClick={()=>run(async()=>{await api('initializations','POST',{mode:'full'});await refresh()})}>创建全量范围</button>
@@ -29,9 +31,10 @@ export function Tasks({api,run,busy,selected,onExtracted}:{api:(p:string,m?:stri
       {i.message_coverage?.scope>0&&<div><small>已提炼 {i.message_coverage.real_extracted} / {i.message_coverage.scope} 条消息</small><progress className="coverage-progress" aria-label="历史消息提炼覆盖" value={i.message_coverage.real_extracted} max={i.message_coverage.scope}/></div>}
       {i.context_warnings?.length>0&&<p>上下文限制：{i.context_warnings.map((w:string)=>warningLabels[w]||w).join('；')}。请结合原话核对。</p>}
       {i.state!=='cancelled'&&(['pause','resume','retry','cancel'] as const).map(a=><button disabled={busy} className="secondary" key={a} onClick={()=>run(async()=>{await api(`initializations/${i.id}/control`,'POST',{action:a});await refresh()})}>{{pause:'暂停',resume:'恢复',retry:'重试失败/阻断',cancel:'取消'}[a]}</button>)}
-      {i.jobs.filter((j:Row)=>j.error).map((j:Row)=><p key={j.id}>窗口 #{j.id}：{j.error}（尝试 {j.attempt} 次）</p>)}
+      {i.jobs.filter((j:Row)=>j.error).map((j:Row)=><p key={j.id}>窗口 #{j.id}：{errorLabels[j.error]||'请核对窗口状态与原文'}（尝试 {j.attempt} 次）</p>)}
       {i.jobs.filter((j:Row)=>j.state==='prepared').map((j:Row)=><div key={j.id}><button disabled={busy} className="secondary" onClick={()=>run(async()=>setRequest(await api(`model-requests/preview/${j.id}`,'POST')))}>预览窗口 #{j.id} 模型输入</button><button disabled={busy} onClick={()=>run(async()=>{setExtracting(j.id);try{await api(`ai/extract/${j.id}`,'POST');await refresh();await onExtracted()}finally{setExtracting(null)}})}>用 AI 提炼此窗口 #{j.id}</button><small>点击将发送此窗口隐私处理后的聊天，可能产生费用。</small></div>)}
     </article>)}
+    <BatchControls api={api} initializations={items}/>
     {request&&<article><h3>本地请求预览 · 不会发送</h3><p>精确日期已省略，因此此版本不能推理相对日期；映射值与账号标识不包含在输入中。</p><pre>{JSON.stringify(request.data,null,2)}</pre></article>}
   </section>;
 }
