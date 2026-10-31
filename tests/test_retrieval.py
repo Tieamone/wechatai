@@ -42,7 +42,9 @@ def test_readonly_recall_matches_frozen_algorithm(tmp_path,monkeypatch,people):
 
 @pytest.mark.parametrize('people',[False,True])
 @pytest.mark.parametrize('dense',[False,True])
-def test_scale_queries_constant_and_exact_results(tmp_path,people,dense):
+@pytest.mark.parametrize('evidence_count',[1,20])
+def test_scale_queries_constant_and_exact_results(tmp_path,monkeypatch,people,dense,evidence_count):
+    from backend.associations import prefetch_evidence
     counts=[]
     for size in (1000,5000):
         path=tmp_path/f'{size}.sqlite3';initialize(path)
@@ -54,11 +56,21 @@ def test_scale_queries_constant_and_exact_results(tmp_path,people,dense):
             db.execute("INSERT INTO person_property(id,person_id,kind,value,confirmation_note) VALUES(1,1,'name','小陈','fixture')")
             db.execute('INSERT INTO property_evidence VALUES(1,1,1,0,2)')
             db.executemany("INSERT INTO memory(id,summary,subject,polarity,assertion,temporal_kind,fingerprint) VALUES(?,?,'peer','positive','direct','fact',?)",((i,'咖啡' if dense or i==1 else '周末运动',str(i)) for i in range(1,size+1)))
-            db.executemany('INSERT INTO memory_evidence VALUES(?,1,1,0,2)',((i,) for i in range(1,size+1)))
+            db.execute("UPDATE message SET text=text||'abcdefghijklmnopqrst' WHERE id=1")
+            db.executemany('INSERT INTO memory_evidence VALUES(?,1,1,?,?)',((i,span,span+1) for i in range(1,size+1) for span in range(evidence_count)))
+            fetched=[]
+            def observed(db,ids,*,with_text=False):
+                rows=dict(prefetch_evidence(db,ids,with_text=with_text))
+                fetched.append((len(ids),sum(len(v) for v in rows.values()),with_text))
+                assert all(('text' in r.keys())==people for group in rows.values() for r in group)
+                return iter(rows.items())
+            monkeypatch.setattr('backend.associations.prefetch_evidence',observed)
             sql=[];db.set_trace_callback(sql.append)
             result=rank_candidates(db,2)
             counts.append(len(sql));db.set_trace_callback(None)
             assert result==legacy_enqueue(db,2)
+            selected=size if people or dense else 1
+            assert fetched==[(selected,selected*evidence_count,people)]
     assert counts==[6,6]
 
 

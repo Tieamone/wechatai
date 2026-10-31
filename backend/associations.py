@@ -5,6 +5,7 @@ import time
 import json
 from datetime import datetime, timedelta
 from functools import lru_cache
+from itertools import groupby
 
 from fastapi import APIRouter
 from pydantic import StrictBool
@@ -57,6 +58,19 @@ def evidence_before(db, memory_id, trigger_time, *, evidence=None):
     return bool(trigger_time and rows) and all(r['event_utc'] and r['event_utc']<trigger_time and r['revision']==r['message_revision'] for r in rows)
 
 
+def prefetch_evidence(db, memory_ids, *, with_text=False):
+    if not memory_ids:return
+    # A bound JSON array avoids SQLite's variable limit without one query per chunk.
+    # This bounds statement count, not the number of matching evidence rows.
+    text=',m.text' if with_text else ''
+    rows=db.execute(f'''SELECT e.memory_id,m.event_utc,m.revision,e.message_revision{text}
+        FROM memory_evidence e JOIN message m ON m.id=e.message_id
+        WHERE e.memory_id IN (SELECT value FROM json_each(?)) ORDER BY e.memory_id''',(json.dumps(memory_ids),))
+    # Consume one memory at a time instead of retaining every history body in Python.
+    for memory_id,group in groupby(rows,key=lambda row:row['memory_id']):
+        yield memory_id,list(group)
+
+
 def rank_candidates(db, trigger_id):
     """Read-only legacy top-10 recall; scores are lexical overlap, not relevance."""
     trigger=db.execute('SELECT * FROM message WHERE id=?',(trigger_id,)).fetchone()
@@ -66,13 +80,14 @@ def rank_candidates(db, trigger_id):
     query=terms(' '.join(r['text'] for r in recent if r['type']=='text'))
     prepared=prepare_mentions(db,recent[0]['event_utc'])
     current_people={r['person_token'] for r in mention_candidates(db,[(r['text'],r['event_utc']) for r in recent if r['type']=='text'],recent[0]['event_utc'],prepared=prepared)}
-    evidence_by_memory={}
-    for row in db.execute("SELECT e.memory_id,m.text,m.event_utc,m.revision,e.message_revision FROM memory_evidence e JOIN message m ON m.id=e.message_id JOIN memory h ON h.id=e.memory_id WHERE h.status='active'"):
-        evidence_by_memory.setdefault(row['memory_id'],[]).append(row)
+    scored=[(len(query & memory_terms(m['id'],m['version'],m['summary'])),m)
+            for m in db.execute("SELECT id,version,summary FROM memory WHERE status='active'").fetchall()]
+    # Person overlap can give a zero-lexical-score memory its first point.
+    selected=[m['id'] for score,m in scored if score or current_people]
+    by_id={memory['id']:(score,memory) for score,memory in scored}
     ranked=[]
-    for memory in db.execute("SELECT * FROM memory WHERE status='active'").fetchall():
-        score=len(query & memory_terms(memory['id'],memory['version'],memory['summary']))
-        evidence=evidence_by_memory.get(memory['id'],[])
+    for memory_id,evidence in prefetch_evidence(db,selected,with_text=bool(current_people)):
+        score,memory=by_id[memory_id]
         if current_people:
             history=[(r['text'],r['event_utc']) for r in evidence]
             history_people={r['person_token'] for r in mention_candidates(db,history,recent[0]['event_utc'],prepared=prepared)}
