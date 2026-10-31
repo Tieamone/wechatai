@@ -4,13 +4,23 @@ import re
 from .privacy import PHONE_VALUE, normalized_value
 
 
-def mention_candidates(db, sources, cutoff):
+def prepare_mentions(db, cutoff):
+    properties=db.execute("SELECT r.*,p.token FROM person_property r JOIN person p ON p.id=r.person_id WHERE r.status='active' ORDER BY r.id").fetchall()
+    if not properties:return []
+    evidence_by_property={}
+    for row in db.execute("SELECT e.*,m.text,m.revision,m.event_utc FROM property_evidence e JOIN message m ON m.id=e.message_id JOIN person_property p ON p.id=e.property_id WHERE p.status='active' ORDER BY m.id,e.span_start"):
+        evidence_by_property.setdefault(row['property_id'],[]).append(row)
     eligible=[]
-    for prop in db.execute("SELECT r.*,p.token FROM person_property r JOIN person p ON p.id=r.person_id WHERE r.status='active' ORDER BY r.id"):
-        evidence=db.execute('SELECT e.*,m.text,m.revision,m.event_utc FROM property_evidence e JOIN message m ON m.id=e.message_id WHERE property_id=? ORDER BY m.id,e.span_start',(prop['id'],)).fetchall()
+    for prop in properties:
+        evidence=evidence_by_property.get(prop['id'],[])
         if not evidence or not cutoff or any(r['revision']!=r['message_revision'] or not r['event_utc'] or r['event_utc']>=cutoff for r in evidence):
             continue
         eligible.append((prop,evidence))
+    return eligible
+
+
+def mention_candidates(db, sources, cutoff, *, prepared=None):
+    eligible=prepare_mentions(db,cutoff) if prepared is None else prepared
     result=[]
     for index,(text,instant) in enumerate(sources):
         phones={normalized_value('PHONE',m[0]) for m in re.finditer(PHONE_VALUE,text)}
