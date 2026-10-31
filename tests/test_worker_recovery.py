@@ -9,6 +9,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def isolate_automatic(monkeypatch):
     monkeypatch.setattr('backend.automatic.process_next',lambda *args,**kwargs:{'processed':False})
+    monkeypatch.setattr('backend.batches.process_next',lambda *args,**kwargs:{'processed':False})
+    monkeypatch.setattr('backend.budgets.recover_expired',lambda *args:None)
 
 
 def test_busy_database_retries_without_losing_worker(tmp_path, monkeypatch):

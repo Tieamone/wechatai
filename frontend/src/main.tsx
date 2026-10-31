@@ -1,3 +1,4 @@
+import {BudgetSettings} from './BudgetSettings';
 import {usePolling,MemoryCountsContext} from './usePolling';
 import {NotificationSettings,notificationText} from './NotificationSettings';
 import React, {useState, useCallback, useEffect} from 'react';
@@ -104,6 +105,7 @@ function App() {
       <Page id="tasks/automatic" route={route}><Automatic api={api}/></Page>
       <Page id="tasks/history" route={route}><Tasks api={api} run={run} busy={busy} selected={selected} onExtracted={refresh}/></Page>
       <Page id="settings/notifications" route={route}><NotificationSettings api={api}/></Page>
+      <Page id="settings/budgets" route={route}><BudgetSettings api={api}/></Page>
       <Page id="settings/model" route={route}><AISettings api={api}/></Page>
       <Page id="settings/privacy" route={route}><section><h2>隐私替换预览</h2><p>映射只存本地。此页面不会调用模型；未检出疑点也不代表可以安全外发。</p><div className="row"><select aria-label="映射类型" value={kind} onChange={e=>setKind(e.target.value)}>{['PERSON','PHONE','EMAIL','ADDRESS','ID'].map(k=><option key={k}>{k}</option>)}</select><input aria-label="真实值" value={value} onChange={e=>setValue(e.target.value)} placeholder="需要替换的真实值"/><button disabled={busy} onClick={()=>run(async()=>{await api('mappings','POST',{kind,value});setValue('');setNotice('映射已保存')})}>添加映射</button></div><textarea aria-label="隐私预览文本" value={previewText} onChange={e=>setPreviewText(e.target.value)}/><button disabled={busy} onClick={()=>run(async()=>setPreview(await api('privacy/preview','POST',{text:previewText})))}>本地预览</button>{preview&&<article><b>{preview.status==='blocked'?'已阻断':'仅预览'}</b><p>{preview.reason}</p><pre>{preview.text}</pre></article>}</section><MappingConflicts busy={busy} api={api} run={run}/></Page>
       <Page id="settings/import" route={route}><section><h2>导入统一格式 JSON</h2><p>选择 samples 中的历史样本；添加关注后，再导入实时样本。真实聊天暂不建议导入未加密的原型目录。</p><input aria-label="JSON 文件" type="file" accept=".json" onChange={e=>{const f=e.target.files?.[0];if(f)run(async()=>setPayload(await f.text()))}}/><textarea aria-label="导入 JSON" rows={7} value={payload} onChange={e=>setPayload(e.target.value)} placeholder="粘贴统一导入格式"/><button disabled={busy} onClick={()=>run(async()=>{const result=await api('import','POST',JSON.parse(payload));await refresh();setNotice(`导入完成：新增 ${result.inserted}，更新 ${result.updated}，重复 ${result.duplicates}`)})}>导入到本地</button></section></Page>

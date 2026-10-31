@@ -62,6 +62,10 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
     app.state.db_path = path
     app.state.preparation_worker = worker
     app.include_router(policy.router(path))
+    from .budgets import router as budget_router
+    from .batches import router as batch_router
+    app.include_router(budget_router(path))
+    app.include_router(batch_router(path,allowed=synthetic_provider is None))
     app.include_router(memory_router(path))
     app.include_router(jobs_router(path))
     app.include_router(model_router(path))

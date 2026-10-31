@@ -36,9 +36,14 @@ class PreparationWorker:
                 recover_expired(self.path)
                 result = prepare_one(self.path)
                 if self.synthetic_provider is None and self.synthetic_judge is None:
+                    from .budgets import recover_expired as recover_budget
+                    from .batches import process_next as process_batch
+                    recover_budget(self.path)
                     from .automatic import process_next
                     automatic = process_next(self.path,should_stop=self.stop_event.is_set)
                     result['processed'] = result['processed'] or automatic['processed']
+                    batch=process_batch(self.path,should_stop=self.stop_event.is_set)
+                    result['processed'] = result['processed'] or batch['processed']
                 if self.synthetic_judge is not None:
                     judged = judge_next(self.path, self.synthetic_judge)
                     result['processed'] = result['processed'] or judged['processed']

@@ -18,7 +18,15 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--context',action='store_true')
     parser.add_argument('--p0',action='store_true')
+    parser.add_argument('--budgets',action='store_true')
     args=parser.parse_args()
+    if args.budgets:
+        from backend import ai_settings,usage
+        def fixture_complete(config,system,data):
+            usage.mark_sent()
+            usage.settle({'prompt_tokens':20,'completion_tokens':10,'total_tokens':30})
+            return '{"memories":[]}'
+        ai_settings.complete=fixture_complete
     if not args.p0:
         # Legacy UI scenarios use fixed historical timestamps; P0 exercises real clocks.
         from backend import policy
@@ -55,7 +63,7 @@ def main():
                 raise RuntimeError('Test server did not start')
             env = {**os.environ, 'PLAYWRIGHT_BROWSERS_PATH':str(ROOT/'tools'/'browsers')}
             if args.p0: env['TEST_LOGIN_CODE']=app.state.login_codes.issue()
-            script='e2e/p0.mjs' if args.p0 else ('e2e/context.mjs' if args.context else 'e2e/workflow.mjs')
+            script='e2e/budgets.mjs' if args.budgets else ('e2e/p0.mjs' if args.p0 else ('e2e/context.mjs' if args.context else 'e2e/workflow.mjs'))
             return subprocess.run(['node',script], cwd=ROOT/'frontend', env=env, timeout=120).returncode
         finally:
             server.should_exit = True
