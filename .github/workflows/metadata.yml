@@ -1,0 +1,22 @@
+name: Commit email metadata
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.10'
+      - name: Audit reachable history without disclosing metadata values
+        run: python tools/check_commit_emails.py --all --warn-only
+      - name: Enforce noreply on newly introduced commits
+        env:
+          METADATA_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python tools/check_commit_emails.py --base "$env:METADATA_BASE"
