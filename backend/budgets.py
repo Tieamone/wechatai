@@ -66,7 +66,7 @@ def reserve(db,config,input_tokens,output_tokens):
     assert db.in_transaction
     settings=policy(db)
     now=time.time()
-    db.execute("UPDATE usage_ledger SET state='unknown',lease_until=NULL WHERE state='reserved' AND lease_until<?",(now,))
+    db.execute("UPDATE usage_ledger SET state='unknown',lease_until=NULL WHERE state='reserved' AND (lease_until IS NULL OR lease_until<?)",(now,))
     priced=(settings['model']==config.get('model') and settings['base_url']==config.get('base_url') and settings['input_rate'] is not None and settings['output_rate'] is not None)
     a=max(settings['input_rate'],settings['cached_rate'] or 0) if priced else None
     b=max(settings['output_rate'],settings['reasoning_rate'] or 0) if priced else None
@@ -86,8 +86,8 @@ def reserve(db,config,input_tokens,output_tokens):
 
 def recover_expired(path):
     with connect(path) as db:
-        if not db.execute("SELECT 1 FROM usage_ledger WHERE state='reserved' AND lease_until<? LIMIT 1",(time.time(),)).fetchone():return
-        db.execute("UPDATE usage_ledger SET state='unknown',lease_until=NULL WHERE state='reserved' AND lease_until<?",(time.time(),))
+        if not db.execute("SELECT 1 FROM usage_ledger WHERE state='reserved' AND (lease_until IS NULL OR lease_until<?) LIMIT 1",(time.time(),)).fetchone():return
+        db.execute("UPDATE usage_ledger SET state='unknown',lease_until=NULL WHERE state='reserved' AND (lease_until IS NULL OR lease_until<?)",(time.time(),))
 
 
 def router(path):

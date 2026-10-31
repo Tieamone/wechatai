@@ -80,6 +80,10 @@ def test_release_and_recovery_and_rolling_window(tmp_path):
         assert budgets.totals(db)['tokens']==4196
         db.execute('UPDATE usage_ledger SET at=?',(time.time()-86401,))
         assert budgets.totals(db)['tokens']==0
+        db.execute("INSERT INTO usage_ledger(kind,model,at,state,reserved_input,reserved_output) VALUES('manual','fixture',?,'reserved',100,4096)",(time.time(),))
+    budgets.recover_expired(path)
+    with connect(path) as db:
+        assert db.execute('SELECT state FROM usage_ledger ORDER BY id DESC LIMIT 1').fetchone()[0]=='unknown'
 
 
 def history(client):
