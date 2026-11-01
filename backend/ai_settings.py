@@ -14,6 +14,7 @@ from pydantic import Field, SecretStr, field_validator
 from .models import StrictModel
 from .model_contract import issue_request, commit_response
 from .store import connect
+from . import diagnostics
 
 LOCK = threading.Lock()
 
@@ -105,19 +106,35 @@ def complete(config, system, data):
                 raw = bytearray()
                 for chunk in response.iter_bytes():
                     raw.extend(chunk)
+                    diagnostics.observe(response_bytes=len(raw))
                     if len(raw) > 256000:
-                        raise ValueError('too large')
-                payload = json.loads(raw)
-                from .usage import settle
-                settle(payload.get('usage'))
-                choice = payload['choices'][0]
-                if choice.get('finish_reason') != 'stop' or not isinstance(choice['message']['content'], str):
-                    raise ValueError('incomplete')
-                return choice['message']['content']
+                        raise diagnostics.failure(502,'模型返回过大','D103')
+                diagnostics.observe(raw=bytes(raw),raw_kind='http_json')
+                return parse_response(raw,settle_usage=True)
     except httpx.TimeoutException:
         raise HTTPException(504, '模型请求超时，未自动重试；可能已产生费用') from None
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
         raise HTTPException(502, '模型连接失败或返回不完整；请检查兼容接口配置') from None
+
+
+def parse_response(raw, *, settle_usage=False):
+    try:payload = json.loads(raw)
+    except ValueError:raise diagnostics.failure(502,'模型返回不是合法 JSON','D102') from None
+    if not isinstance(payload,dict):raise diagnostics.failure(502,'模型返回结构不完整','D106')
+    from .usage import settle
+    if settle_usage:settle(payload.get('usage'))
+    usage=payload.get('usage')
+    completion=usage.get('completion_tokens') if isinstance(usage,dict) else None
+    diagnostics.observe(completion_tokens=completion if type(completion) is int and completion>=0 else None)
+    try:choice = payload['choices'][0]
+    except (KeyError,IndexError,TypeError):raise diagnostics.failure(502,'模型返回结构不完整','D106') from None
+    if not isinstance(choice,dict):raise diagnostics.failure(502,'模型返回结构不完整','D106')
+    if choice.get('finish_reason') != 'stop':
+        raise diagnostics.failure(502,'模型返回未完整结束','D104')
+    message=choice.get('message')
+    if not isinstance(message,dict) or not isinstance(message.get('content'), str):
+        raise diagnostics.failure(502,'模型内容不是字符串','D105')
+    return choice['message']['content']
 
 
 def extract_job(path, job_id, config, *, sender=None):
@@ -128,8 +145,9 @@ def extract_job(path, job_id, config, *, sender=None):
                 raise HTTPException(409,'提炼任务已取消或租约失效，未发送请求')
         from .usage import invoke
         send=sender or (lambda c,s,d:invoke(path,c,s,d,kind='manual',sender=complete))
-        response = send(config, request['system']+'\nJSON schema:\n'+json.dumps(request['response_schema']), request['data'])
-        return commit_response(path, request['request_id'], response)
+        with diagnostics.capture(path,request['request_id']):
+            response = send(config, request['system']+'\nJSON schema:\n'+json.dumps(request['response_schema']), request['data'])
+            return commit_response(path, request['request_id'], response)
     except Exception as error:
         with connect(path) as db:
             limited=isinstance(error,HTTPException) and error.status_code==429

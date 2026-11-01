@@ -2,9 +2,10 @@ import {useState} from 'react';
 import {usePolling,type API} from './usePolling';
 
 export function BudgetSettings({api}:{api:API}){
+  const [diagnostics,setDiagnostics]=useState<any>(null);
   const [data,setData]=useState<any>(null),[form,setForm]=useState<any>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[saved,setSaved]=useState(false);
-  usePolling(api,['budgets'],([d])=>{setData(d);setForm((old:any)=>old||d.settings)},e=>setError(String(e)),5000);
+  usePolling(api,['budgets','model-diagnostics'],([d,diagnostic])=>{setDiagnostics(diagnostic);setData(d);setForm((old:any)=>old||d.settings)},e=>setError(String(e)),5000);
   function change(key:string,value:any){setForm({...form,[key]:value});setSaved(false)}
   async function save(){setBusy(true);setError('');try{const {id,...body}=form;const d=await api('budgets','PUT',body);setData(d);setForm(d.settings);setSaved(true)}catch(e){setError(String(e))}finally{setBusy(false)}}
   return <section><h2>调用预算与单价</h2><p>统一约束手动提炼、批量提炼、自动提炼与判断、连接测试。滚动 24 小时预算和单批预算同时生效；已有自动调用次数上限仍保留。</p>
@@ -21,6 +22,11 @@ export function BudgetSettings({api}:{api:API}){
     </>}
     {data&&<article><h3>最近 24 小时占用</h3><p>Token：{data.rolling.tokens}；可计价金额：{(data.rolling.amount/1000000).toFixed(6)} 元；无法计价调用：{data.rolling.unpriced} 次。</p><p>当前模型单价{data.price_matches?'已绑定':'未确认或已失配'}。未计价调用不视作免费，金额预算开启后会阻止后续调用。</p>{data.rolling.legacy_unknown>0&&<p>有 {data.rolling.legacy_unknown} 条旧调用缺少输入估算。启用预算后将暂停新调用，直到这些记录移出滚动 24 小时窗口；不会清空旧账本来绕过额度。</p>}<p>用量状态：{Object.entries(data.states).map(([key,n])=>`${({reserved:'发送前预留',released:'未发送已释放',unknown:'已发送或中断，用量未知',settled:'用量已结算'} as Record<string,string>)[key]||key} ${n}`).join('；')||'暂无调用'}</p></article>}
     <p>每次发送前预留保守输入估算和最多 4096 输出 Token；得到合法 usage 后按实际 Token 结算。超时和未知用量保留预留；确认发送前失败才释放。预算不足时不启动下一次调用，已发出的请求不能撤回。硬预算控制的是本机预留和已知用量，不能保证供应商最终账单绝不超出估算。</p>
+    <article><h3>模型失败诊断</h3><p>本机保留最近 20 条失败记录；原始返回每条最多 256 KiB，总文件量最多 5 MiB。返回可能包含敏感内容，按聊天数据保护，不上传到仓库。超限只记元数据，原始内容不在网页展示。</p>
+      <p>当前保留 {diagnostics?.records?.length||0} 条。</p>
+      {diagnostics?.records?.map((r:any)=><p key={r.id}>失败编号：{r.code} · 位置：{r.location.join(' / ')||'整体'} · 响应字节：{r.response_bytes??'未知'} · 输出 Token：{r.completion_tokens??'未知'} · 记忆数：{r.memory_count??'未知'} · 原始返回：{r.has_raw?'本机已保留':'未保留'}</p>)}
+      <button className="secondary" disabled={busy} onClick={async()=>{setBusy(true);try{await api('model-diagnostics','DELETE');setDiagnostics({...diagnostics,records:[]})}catch(e){setError(String(e))}finally{setBusy(false)}}}>删除全部模型失败记录及原始返回</button>
+    </article>
     {error&&<p role="alert" className="error">{error}</p>}
   </section>;
 }

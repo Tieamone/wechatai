@@ -7,7 +7,8 @@ import time
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import Field
+from pydantic import Field, ValidationError
+from . import diagnostics
 
 from .memories import Evidence, MemoryDraft, create_memory
 from .models import StrictModel
@@ -94,39 +95,52 @@ def issue_request(path, job_id, *, claim=False, provider='synthetic'):
                 'response_schema': Extraction.model_json_schema(), 'external_enabled': provider != 'synthetic', 'provider': provider}
 
 
-def commit_response(path, request_id, raw_response):
+def _commit_response(path, request_id, raw_response, *, replay=False):
     """Validate synthetic and real responses against the same evidence boundary."""
     if not isinstance(raw_response, str) or len(raw_response) > 100000:
         raise HTTPException(422, '模型返回过大或类型错误')
     try:
+        decoded=json.loads(raw_response)
+        if isinstance(decoded,dict) and isinstance(decoded.get('memories'),list):
+            diagnostics.observe(memory_count=len(decoded['memories']))
+    except ValueError:pass
+    try:
         parsed = Extraction.model_validate_json(raw_response)
-    except ValueError:
-        raise HTTPException(422, '模型返回结构不符合契约') from None
+    except ValidationError as error:
+        item=error.errors(include_input=False,include_url=False)[0]
+        category=item['type']
+        codes={'json_invalid':'D102','missing':'D111','extra_forbidden':'D112','too_long':'D114'}
+        code='D115' if category=='too_long' and 'source_refs' in item['loc'] else codes.get(category,'D113')
+        allowed={'memories','summary','subject','polarity','assertion','temporal_kind','source_refs'}
+        location=[v if isinstance(v,int) or v in allowed else '<field>' for v in item['loc']]
+        raise diagnostics.failure(422,'模型返回结构不符合契约',code,location) from None
+    diagnostics.observe(memory_count=len(parsed.memories))
     result_hash = digest(parsed.model_dump())
-    with connect(path) as db:
-        db.execute('BEGIN IMMEDIATE')
+    with diagnostics.connection(path,replay) as db:
+        db.execute('BEGIN' if replay else 'BEGIN IMMEDIATE')
         request = db.execute('SELECT * FROM model_request WHERE id=?', (request_id,)).fetchone()
         if not request:
             raise HTTPException(404, '请求不存在')
         job = db.execute('SELECT j.*,i.state AS initialization_state FROM job j JOIN initialization i ON i.id=j.initialization_id WHERE j.id=?', (request['job_id'],)).fetchone()
-        if job['initialization_state'] != 'active' or job['state'] not in ('prepared', 'extracting', 'validated_synthetic', 'validated_model'):
+        if not replay and (job['initialization_state'] != 'active' or job['state'] not in ('prepared', 'extracting', 'validated_synthetic', 'validated_model')):
             raise HTTPException(409, '任务已暂停、取消或失效')
-        if job['state'] == 'extracting' and (job['owner'] != request_id or job['lease_until'] <= time.time()):
+        if not replay and job['state'] == 'extracting' and (job['owner'] != request_id or job['lease_until'] <= time.time()):
             raise HTTPException(409, '执行租约已过期')
         stored = json.loads(request['payload_json'])
         payload, refs = current_window(db, job)
         if request['mapping_hash'] != mapping_hash(db) or digest({'payload': payload, 'refs': refs}) != request['input_hash']:
             raise HTTPException(409, '证据或映射变化，拒绝迟到返回')
-        if request['state'] == 'validated':
+        if not replay and request['state'] == 'validated':
             if request['result_hash'] != result_hash:
                 raise HTTPException(409, '同一请求不能提交不同结果')
             return {'memory_ids': json.loads(request['memory_ids_json']), 'duplicate': True}
-        if request['state'] != 'issued':
+        if not replay and request['state'] != 'issued':
             raise HTTPException(409, '请求已被新请求替代')
         allowed = {t for m in stored['payload']['messages'] for t in TOKEN.findall(m['text'])}
         mappings = {r['token']: r['value'] for r in db.execute('SELECT token,value FROM entity_value') if r['token'] in allowed}
         ids = []
-        for fact in parsed.memories:
+        for index,fact in enumerate(parsed.memories):
+            diagnostics.observe(location=['memories',index])
             if request['provider'] != 'synthetic' and not re.search(r'[\u4e00-\u9fff]', fact.summary):
                 raise HTTPException(422, '模型摘要未使用中文，结果未保存；请重试此窗口')
             if len(fact.source_refs) != len(set(fact.source_refs)) or any(ref not in refs for ref in fact.source_refs):
@@ -142,12 +156,21 @@ def commit_response(path, request_id, raw_response):
                 evidence.append(Evidence(message_id=source['id'], message_revision=source['revision'], span_start=0, span_end=len(row['text'])))
             draft = MemoryDraft(summary=summary, subject=fact.subject, polarity=fact.polarity,
                                 assertion=fact.assertion, temporal_kind=fact.temporal_kind, evidence=evidence)
-            ids.append(create_memory(db, draft, origin='synthetic' if request['provider']=='synthetic' else 'model')['id'])
+            ids.append(create_memory(db, draft, origin='synthetic' if request['provider']=='synthetic' else 'model',validate_only=replay)['id'])
+        if replay:return {'valid':True,'memory_count':len(ids),'lifecycle_checks':'not_replayed'}
         state = 'validated_synthetic' if request['provider']=='synthetic' else 'validated_model'
         db.execute("UPDATE job SET state=?,owner=NULL,lease_until=NULL WHERE id=?", (state, job['id']))
         db.execute("UPDATE model_request SET state='validated',result_hash=?,memory_ids_json=? WHERE id=?",
                    (result_hash, json.dumps(ids), request_id))
     return {'memory_ids': ids, 'duplicate': False}
+
+
+
+def commit_response(path,request_id,raw_response):
+    with diagnostics.capture(path,request_id):
+        if not diagnostics.CURRENT.get().get('raw'):
+            diagnostics.observe(raw=raw_response,raw_kind='extraction')
+        return _commit_response(path,request_id,raw_response)
 
 
 def router(path):

@@ -65,7 +65,7 @@ def invalidate_source(db, message_id):
         db.execute("UPDATE reminder SET status='withdrawn' WHERE watch_id IN (SELECT id FROM watch_item WHERE source_memory_id=?)", (memory_id,))
 
 
-def create_memory(db, draft, origin='manual', permitted_sources=frozenset()):
+def create_memory(db, draft, origin='manual', permitted_sources=frozenset(), *, validate_only=False):
     if not db.in_transaction:
         db.execute('BEGIN IMMEDIATE')
     unique = {(e.message_id, e.message_revision, e.span_start, e.span_end) for e in draft.evidence}
@@ -92,6 +92,7 @@ def create_memory(db, draft, origin='manual', permitted_sources=frozenset()):
         if existing['status'] != 'active':
             raise HTTPException(409, '记忆已停用，不能自动复活')
         return {'id': existing['id'], 'duplicate': True}
+    if validate_only:return {'id':None,'duplicate':False}
     cursor = db.execute('INSERT INTO memory(summary,subject,polarity,assertion,temporal_kind,fingerprint) VALUES(?,?,?,?,?,?)',
                         (draft.summary, draft.subject, draft.polarity, draft.assertion, draft.temporal_kind, fingerprint))
     memory_id = cursor.lastrowid
