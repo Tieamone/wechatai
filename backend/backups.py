@@ -20,6 +20,13 @@ def record_failure(path, reason):
         pass  # The console remains available when the disk cannot be written.
 
 
+def clear_failure(path):
+    try:
+        (path.parent/'backups/last-failure.json').unlink(missing_ok=True)
+    except OSError:
+        pass  # A stale diagnostic must not prevent an otherwise successful startup.
+
+
 @contextmanager
 def migration_guard(path):
     from .runtime import worker_lock, owned_workbench
