@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import Field, field_validator
 
 from .models import StrictModel
+from . import diagnostics
 from .store import connect, tokens
 from .jobs import invalidate_jobs
 
@@ -70,27 +71,27 @@ def create_memory(db, draft, origin='manual', permitted_sources=frozenset(), *, 
         db.execute('BEGIN IMMEDIATE')
     unique = {(e.message_id, e.message_revision, e.span_start, e.span_end) for e in draft.evidence}
     if len(unique) != len(draft.evidence):
-        raise HTTPException(422, '证据片段重复')
+        raise diagnostics.failure(422, '证据片段重复', 'D305')
     for evidence in draft.evidence:
         row = db.execute('SELECT * FROM message WHERE id=?', (evidence.message_id,)).fetchone()
         if not row or row['type'] != 'text':
-            raise HTTPException(422, '证据必须指向本地文字消息')
+            raise diagnostics.failure(422, '证据必须指向本地文字消息', 'D306')
         if row['revision'] != evidence.message_revision:
-            raise HTTPException(409, '证据版本已变化，请重新选择原文')
+            raise diagnostics.failure(409, '证据版本已变化，请重新选择原文', 'D307')
         if not 0 <= evidence.span_start < evidence.span_end <= len(row['text']):
-            raise HTTPException(422, '证据引用范围无效')
+            raise diagnostics.failure(422, '证据引用范围无效', 'D308')
         if draft.assertion == 'direct' and draft.subject in ('peer', 'self') and row['sender_role'] != draft.subject:
-            raise HTTPException(422, '本人陈述必须由对应角色的原文支持；转述请单独标记')
+            raise diagnostics.failure(422, '本人陈述必须由对应角色的原文支持；转述请单独标记', 'D304')
         if (evidence.message_id,evidence.message_revision) not in permitted_sources and db.execute('SELECT 1 FROM suppressed_evidence WHERE message_id=? AND message_revision=?',
                       (evidence.message_id, evidence.message_revision)).fetchone():
-            raise HTTPException(409, '该版本证据已被用户标错停用，不可重复提炼；可使用新消息或修订后的证据')
+            raise diagnostics.failure(409, '该版本证据已被用户标错停用，不可重复提炼；可使用新消息或修订后的证据', 'D309')
     payload = draft.model_dump()
     payload['evidence'] = sorted(payload['evidence'], key=lambda e: (e['message_id'], e['span_start'], e['span_end']))
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     existing = db.execute('SELECT id,status FROM memory WHERE fingerprint=?', (fingerprint,)).fetchone()
     if existing:
         if existing['status'] != 'active':
-            raise HTTPException(409, '记忆已停用，不能自动复活')
+            raise diagnostics.failure(409, '记忆已停用，不能自动复活', 'D310')
         return {'id': existing['id'], 'duplicate': True}
     if validate_only:return {'id':None,'duplicate':False}
     cursor = db.execute('INSERT INTO memory(summary,subject,polarity,assertion,temporal_kind,fingerprint) VALUES(?,?,?,?,?,?)',

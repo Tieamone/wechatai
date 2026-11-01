@@ -152,6 +152,16 @@ def create_initialization(db, body):
 def router(path: Path):
     routes = APIRouter(prefix='/api/initializations')
 
+    @routes.get('/{initialization_id}/extraction-audits')
+    def extraction_audits(initialization_id:int, before_id:int|None=None):
+        with connect(path) as db:
+            rows=db.execute("""SELECT id,json_extract(result_json,'$.extraction_audit') AS audit FROM job
+                WHERE initialization_id=? AND (? IS NULL OR id<?)
+                AND json_extract(result_json,'$.extraction_audit') IS NOT NULL ORDER BY id DESC LIMIT 101""",
+                (initialization_id,before_id,before_id)).fetchall()
+            return {'items':[{'job_id':r['id'],'audit':json.loads(r['audit'])} for r in rows[:100]],
+                    'next_before_id':rows[99]['id'] if len(rows)>100 else None}
+
     @routes.post('')
     def start(body: Initialization):
         with connect(path) as db:
