@@ -62,6 +62,8 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
     app.state.db_path = path
     app.state.preparation_worker = worker
     app.include_router(policy.router(path))
+    from .diagnostics import router as diagnostic_router
+    app.include_router(diagnostic_router(path))
     from .budgets import router as budget_router
     from .batches import router as batch_router
     app.include_router(budget_router(path))
