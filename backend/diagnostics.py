@@ -50,6 +50,12 @@ def save(path,request_id,error,values):
           **diagnostic,'response_bytes':size,'completion_tokens':values.get('completion_tokens'),
           'extraction_audit':values.get('extraction_audit'),'memory_count':values.get('memory_count'),'raw_kind':values.get('raw_kind','extraction'),
           'raw':raw.decode('utf-8',errors='replace') if isinstance(raw,bytes) and len(raw)<=MAX_RAW else None}
+    if diagnostic['code'] in {'D102','D106'}:
+        prefix=values.get('raw_prefix')
+        body.update(http_status=values.get('http_status'),content_type=values.get('content_type'),
+                    raw_prefix=prefix.encode('utf-8')[:2048].decode('utf-8',errors='ignore') if isinstance(prefix,str) else None,
+                    prefix_omitted_reason=values.get('prefix_omitted_reason'))
+        body['raw']=None
     with LOCK:
         target=directory(path);target.mkdir(exist_ok=True)
         name=target/('rejection-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')+'-'+body['id']+'.json')
@@ -82,8 +88,9 @@ def listing(path):
         for file in reversed(files(path)):
             try:
                 item=json.loads(file.read_text(encoding='utf-8'))
-                rows.append({k:v for k,v in item.items() if k!='raw'})
+                rows.append({k:v for k,v in item.items() if k not in {'raw','raw_prefix'}})
                 rows[-1]['has_raw']=item.get('raw') is not None
+                rows[-1]['has_prefix']=item.get('raw_prefix') is not None
             except (OSError,ValueError):continue
         return {'records':rows,'count_limit':20,'raw_byte_limit':MAX_RAW,'total_byte_limit':MAX_TOTAL}
 
