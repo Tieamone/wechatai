@@ -156,7 +156,7 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
         stored = json.loads(request['payload_json'])
         payload, refs = current_window(db, job)
         frozen=stored.get('policy',{})
-        if not replay and frozen and normalize_d304 is not None and normalize_d304!=frozen['normalize_d304']:
+        if not replay and frozen and normalize_d304 is not None and normalize_d304!=frozen.get('normalize_d304',False):
             raise diagnostics.failure(409,'请求规整策略已冻结','D209')
         if normalize_d304 is None:normalize_d304=frozen.get('normalize_d304',False)
         checked={'payload':payload,'refs':refs}
