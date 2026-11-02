@@ -137,13 +137,17 @@ def memory_card(db, row):
         item.pop('text', None)
         card['evidence'].append(item)
     card['mixed_role_evidence']=card['origin'] in ('model','synthetic') and card['assertion']=='direct' and card['subject'] in ('self','peer') and any(e['sender_role']!=card['subject'] for e in card['evidence'])
+    snapshot=[{k:e[k] for k in ('message_id','message_revision','span_start','span_end')} for e in card['evidence']]
+    card['low_value']=any(json.loads(f['evidence_json'])==snapshot for f in db.execute(
+        "SELECT evidence_json FROM feedback WHERE memory_id=? AND memory_version=? AND action='low_value' AND valid=1",
+        (row['id'],row['version']))) and all(e['current_revision']==e['message_revision'] for e in card['evidence'])
     return card
 
 
 def record_feedback(db,memory_id,action):
     import json
     row=db.execute('SELECT version FROM memory WHERE id=?',(memory_id,)).fetchone()
-    evidence=[dict(r) for r in db.execute('SELECT message_id,message_revision,span_start,span_end FROM memory_evidence WHERE memory_id=?',(memory_id,))]
+    evidence=[dict(r) for r in db.execute('SELECT message_id,message_revision,span_start,span_end FROM memory_evidence WHERE memory_id=? ORDER BY message_id,span_start',(memory_id,))]
     db.execute('INSERT INTO feedback(memory_id,memory_version,action,evidence_json) VALUES(?,?,?,?)',(memory_id,row['version'],action,json.dumps(evidence)))
 
 
@@ -182,7 +186,7 @@ def router(path: Path):
             return {'pending':total-confirmed,'confirmed':confirmed}
 
     @routes.post('/{memory_id}/review/{action}')
-    def review_memory(memory_id:int, action:Literal['confirm','reopen'], body:Review):
+    def review_memory(memory_id:int, action:Literal['confirm','reopen','low_value'], body:Review):
         with connect(path) as db:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT * FROM memory WHERE id=?',(memory_id,)).fetchone()
@@ -193,7 +197,7 @@ def router(path: Path):
             record_feedback(db,memory_id,action)
             if action=='confirm':
                 db.execute('INSERT INTO memory_review(memory_id,confirmed_version) VALUES(?,?) ON CONFLICT(memory_id) DO UPDATE SET confirmed_version=excluded.confirmed_version,confirmed_at=CURRENT_TIMESTAMP',(memory_id,row['version']))
-            else:
+            elif action=='reopen':
                 db.execute('DELETE FROM memory_review WHERE memory_id=?',(memory_id,))
             return {'ok':True,'confirmed':action=='confirm'}
 
