@@ -1,3 +1,4 @@
+from backend.store import SCHEMA_VERSION
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -213,7 +214,7 @@ def test_v20_restore_and_context_index(tmp_path):
     restored=tmp_path/'restored/memory.sqlite3';restored.parent.mkdir();shutil.copy2(backup,restored)
     initialize(restored)
     with connect(restored) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==22
+        assert db.execute('PRAGMA user_version').fetchone()[0]==SCHEMA_VERSION
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
         assert tuple(db.execute('SELECT at,reserved_input,reserved_output FROM usage_ledger').fetchone())==(123456,100,4096)
         plan=' '.join(r[-1] for r in db.execute("EXPLAIN QUERY PLAN SELECT * FROM message WHERE conversation_id=? AND event_utc>=? AND (event_utc<? OR (event_utc=? AND id<=?)) ORDER BY event_utc DESC,id DESC LIMIT 8",('fixture','2026-01-01','2026-02-01','2026-02-01',10)))
