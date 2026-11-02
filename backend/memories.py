@@ -199,7 +199,8 @@ def router(path: Path):
                 db.execute('INSERT INTO memory_review(memory_id,confirmed_version) VALUES(?,?) ON CONFLICT(memory_id) DO UPDATE SET confirmed_version=excluded.confirmed_version,confirmed_at=CURRENT_TIMESTAMP',(memory_id,row['version']))
             elif action=='reopen':
                 db.execute('DELETE FROM memory_review WHERE memory_id=?',(memory_id,))
-            return {'ok':True,'confirmed':action=='confirm'}
+            confirmed=db.execute('SELECT 1 FROM memory_review WHERE memory_id=? AND confirmed_version=?',(memory_id,row['version'])).fetchone()
+            return {'ok':True,'confirmed':bool(confirmed)}
 
     @routes.post('/{memory_id}/correct')
     def correct(memory_id: int, body: Correction):
