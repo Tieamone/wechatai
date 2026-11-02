@@ -66,12 +66,18 @@ def invalidate_source(db, message_id):
         db.execute("UPDATE reminder SET status='withdrawn' WHERE watch_id IN (SELECT id FROM watch_item WHERE source_memory_id=?)", (memory_id,))
 
 
-def create_memory(db, draft, origin='manual', permitted_sources=frozenset(), *, validate_only=False):
+def create_memory(db, draft, origin='manual', permitted_sources=frozenset(), *, validate_only=False, allow_mixed_roles=False):
     if not db.in_transaction:
         db.execute('BEGIN IMMEDIATE')
     unique = {(e.message_id, e.message_revision, e.span_start, e.span_end) for e in draft.evidence}
     if len(unique) != len(draft.evidence):
         raise diagnostics.failure(422, '证据片段重复', 'D305')
+    roles=[]
+    if allow_mixed_roles:
+        for e in draft.evidence:
+            role=db.execute('SELECT sender_role FROM message WHERE id=?',(e.message_id,)).fetchone()
+            roles.append(role[0] if role else None)
+    mixed_allowed=allow_mixed_roles and origin in ('model','synthetic') and draft.subject in roles and set(roles)<={'self','peer'}
     for evidence in draft.evidence:
         row = db.execute('SELECT * FROM message WHERE id=?', (evidence.message_id,)).fetchone()
         if not row or row['type'] != 'text':
@@ -80,7 +86,7 @@ def create_memory(db, draft, origin='manual', permitted_sources=frozenset(), *, 
             raise diagnostics.failure(409, '证据版本已变化，请重新选择原文', 'D307')
         if not 0 <= evidence.span_start < evidence.span_end <= len(row['text']):
             raise diagnostics.failure(422, '证据引用范围无效', 'D308')
-        if draft.assertion == 'direct' and draft.subject in ('peer', 'self') and row['sender_role'] != draft.subject:
+        if draft.assertion == 'direct' and draft.subject in ('peer', 'self') and row['sender_role'] != draft.subject and not mixed_allowed:
             raise diagnostics.failure(422, '本人陈述必须由对应角色的原文支持；转述请单独标记', 'D304')
         if (evidence.message_id,evidence.message_revision) not in permitted_sources and db.execute('SELECT 1 FROM suppressed_evidence WHERE message_id=? AND message_revision=?',
                       (evidence.message_id, evidence.message_revision)).fetchone():
@@ -130,6 +136,7 @@ def memory_card(db, row):
         item['quote'] = item.pop('text')[item['span_start']:item['span_end']] if item['current_revision'] == item['message_revision'] else None
         item.pop('text', None)
         card['evidence'].append(item)
+    card['mixed_role_evidence']=card['origin'] in ('model','synthetic') and card['assertion']=='direct' and card['subject'] in ('self','peer') and any(e['sender_role']!=card['subject'] for e in card['evidence'])
     return card
 
 

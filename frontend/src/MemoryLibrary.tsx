@@ -37,9 +37,10 @@ export function MemoryLibrary({api,run,refresh,busy,memories}:Props){
       <small>{m.confirmed?'✓ 已确认':m.origin==='model'?'AI 提炼 · 待核对':m.origin==='synthetic'?'合成返回 · 待核对':'人工整理 · 待核对'} · {labels[m.subject]} · {labels[m.temporal_kind]}</small>
       <h3>{m.summary}</h3>
       <button disabled={busy} className={m.confirmed?'secondary':''} onClick={()=>run(async()=>{await api(`memories/${m.id}/review/${m.confirmed?'reopen':'confirm'}`,'POST',{expected_version:m.version});await changed()})}>{m.confirmed?'移回待核对':'✓ 确认正确'}</button>
-      <details><summary>查看原文证据与更正（{m.evidence.length} 条证据）</summary>
+      {m.mixed_role_evidence&&<p role="status">混合角色证据 · {m.confirmed?'已人工核对':'待人工核对'}。全部引用完整保留，请结合双方原文判断摘要。</p>}
+      <details open={m.mixed_role_evidence?true:undefined}><summary>查看原文证据与更正（{m.evidence.length} 条证据）</summary>
         <small>{labels[m.polarity]} · {labels[m.assertion]}{m.confirmed?' · 当前版本已确认':''}</small>
-        {m.evidence.map((e:Row)=><blockquote key={`${e.message_id}-${e.span_start}`}><p>{e.quote??'原文已修订，旧引用不可用'}</p><small>证据 #{e.message_id} · {e.event_time||'时间未知'} · 版本 {e.message_revision}</small></blockquote>)}
+        {m.evidence.map((e:Row)=><blockquote key={`${e.message_id}-${e.span_start}`}><p>{e.quote??'原文已修订，旧引用不可用'}</p><small>证据 #{e.message_id} · {labels[e.sender_role]||'未知角色'} · {e.event_time||'时间未知'} · 版本 {e.message_revision}</small></blockquote>)}
         <button className="secondary" disabled={busy} onClick={()=>run(async()=>{await api(`memories/${m.id}/correct`,'POST',{reason:'用户在控制台标错'});await changed()})}>标错并停用</button>
         <MemoryRevision memory={m} busy={busy} api={api} run={run} refresh={changed}/>
       </details>

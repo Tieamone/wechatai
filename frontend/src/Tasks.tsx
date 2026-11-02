@@ -35,8 +35,8 @@ export function Tasks({api,run,busy,selected,onExtracted}:{api:(p:string,m?:stri
       {i.jobs.filter((j:Row)=>j.error).map((j:Row)=><p key={j.id}>窗口 #{j.id}：{errorLabels[j.error]||'请核对窗口状态与原文'}（尝试 {j.attempt} 次）</p>)}
       <details><summary>查看逐窗引用规整记录</summary><p>在线规整当前默认关闭。记录只含数量、原因、消息 ID、版本和角色；离线报告不会写入这里。</p>
         <button disabled={busy} onClick={()=>run(async()=>setAudits({...audits,[i.id]:await api(`initializations/${i.id}/extraction-audits`)}))}>加载最近记录</button>
-        {audits[i.id]?.items.map((entry:any)=><article key={entry.job_id}><p>窗口 #{entry.job_id}：剔除引用 {entry.audit.removed_references} 条，丢弃记忆 {entry.audit.dropped_memories} 条；规整{entry.audit.enabled?'启用':'关闭'}。</p>
-          {entry.audit.items.map((a:any)=><p key={a.memory_index}>第 {a.memory_index+1} 条记忆：{a.action==='dropped'?'丢弃此条':'过滤引用'}；D304 主体与证据角色不一致。保留证据：{a.kept.map((r:any)=>`#${r.id} v${r.revision} ${r.role==='self'?'本人':r.role==='peer'?'对方':'未知'}`).join('、')||'无'}；移除：{a.removed.length} 条。</p>)}</article>)}
+        {audits[i.id]?.items.map((entry:any)=><article key={entry.job_id}><p>窗口 #{entry.job_id}：剔除引用 {entry.audit.removed_references} 条，丢弃记忆 {entry.audit.dropped_memories} 条，混合角色 {entry.audit.mixed_role_memories||0} 条；规整{entry.audit.enabled?'启用':'关闭'}。</p>
+          {entry.audit.items.map((a:any)=><p key={a.memory_index}>第 {a.memory_index+1} 条记忆：{a.action==='dropped'?'丢弃此条':a.action==='mixed_roles'?'完整引用保留，混合角色待核对':'旧版过滤记录'}；D304 主体与证据角色不一致。保留证据：{a.kept.map((r:any)=>`#${r.id} v${r.revision} ${r.role==='self'?'本人':r.role==='peer'?'对方':'未知'}`).join('、')||'无'}；移除：{a.removed.length} 条。</p>)}</article>)}
         {audits[i.id]?.items.length===0&&<p>尚无已提交的规整记录。</p>}
         {audits[i.id]?.next_before_id&&<button disabled={busy} onClick={()=>run(async()=>{const more=await api(`initializations/${i.id}/extraction-audits?before_id=${audits[i.id].next_before_id}`);setAudits({...audits,[i.id]:{...more,items:[...audits[i.id].items,...more.items]}})})}>加载更早记录</button>}
       </details>

@@ -134,7 +134,7 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
             if request['result_hash'] != result_hash:
                 raise diagnostics.failure(409, '同一请求不能提交不同结果', 'D209')
             prior=json.loads(job['result_json'] or '{}').get('extraction_audit')
-            if prior and prior['enabled']!=normalize_d304:
+            if prior and (prior['enabled']!=normalize_d304 or (normalize_d304 and prior.get('version')!=2)):
                 raise diagnostics.failure(409,'同一请求不能改变规整策略','D209')
             return {'memory_ids': json.loads(request['memory_ids_json']), 'duplicate': True,'audit':prior}
         if not replay and request['state'] != 'issued':
@@ -142,7 +142,7 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
         allowed = {t for m in stored['payload']['messages'] for t in TOKEN.findall(m['text'])}
         mappings = {r['token']: r['value'] for r in db.execute('SELECT token,value FROM entity_value') if r['token'] in allowed}
         ids = []
-        audit={'version':1,'enabled':normalize_d304,'removed_references':0,'dropped_memories':0,'items':[]}
+        audit={'version':2,'enabled':normalize_d304,'removed_references':0,'dropped_memories':0,'mixed_role_memories':0,'items':[]}
         roles={m['source_ref']:m['role'] for m in payload['messages']}
         for index,fact in enumerate(parsed.memories):
             diagnostics.observe(location=['memories',index])
@@ -156,16 +156,17 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
             summary = TOKEN.sub(lambda m: mappings[m[0]], fact.summary)
             if not summary.strip():raise diagnostics.failure(422,'记忆内容不能为空','D113',['memories',index,'summary'])
             selected=fact.source_refs
-            if normalize_d304 and fact.assertion=='direct' and fact.subject in ('self','peer'):
-                selected=[ref for ref in fact.source_refs if roles[ref]==fact.subject]
-                removed=[ref for ref in fact.source_refs if ref not in selected]
-                if removed:
-                    def source(ref):return {**refs[ref],'role':roles[ref]}
-                    audit['removed_references']+=len(removed)
-                    audit['dropped_memories']+=int(not selected)
-                    audit['items'].append({'memory_index':index,'reason':'D304','action':'filtered' if selected else 'dropped',
-                                           'kept':[source(ref) for ref in selected],'removed':[source(ref) for ref in removed]})
-                if not selected:continue
+            mixed=False
+            if normalize_d304 and fact.assertion=='direct' and fact.subject in ('self','peer') and all(roles[ref] in ('self','peer') for ref in selected):
+                own=[ref for ref in selected if roles[ref]==fact.subject]
+                mixed=bool(own) and len(own)!=len(selected)
+                if mixed or not own:
+                    references=[{**refs[ref],'role':roles[ref]} for ref in selected]
+                    audit['mixed_role_memories']+=int(mixed)
+                    audit['dropped_memories']+=int(not own)
+                    audit['items'].append({'memory_index':index,'reason':'D304','action':'mixed_roles' if mixed else 'dropped',
+                                           'kept':references if mixed else [],'removed':[],'references':references})
+                if not own:continue
             evidence = []
             for ref in selected:
                 source = refs[ref]
@@ -173,7 +174,7 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
                 evidence.append(Evidence(message_id=source['id'], message_revision=source['revision'], span_start=0, span_end=len(row['text'])))
             draft = MemoryDraft(summary=summary, subject=fact.subject, polarity=fact.polarity,
                                 assertion=fact.assertion, temporal_kind=fact.temporal_kind, evidence=evidence)
-            ids.append(create_memory(db, draft, origin='synthetic' if request['provider']=='synthetic' else 'model',validate_only=replay)['id'])
+            ids.append(create_memory(db, draft, origin='synthetic' if request['provider']=='synthetic' else 'model',validate_only=replay,allow_mixed_roles=mixed)['id'])
         if replay:return {'valid':True,'memory_count':len(ids),'lifecycle_checks':'not_replayed','audit':audit}
         state = 'validated_synthetic' if request['provider']=='synthetic' else 'validated_model'
         result=json.loads(job['result_json'] or '{}');result['extraction_audit']=audit
