@@ -16,6 +16,9 @@ def remove_v21(db):
 
 def remove_pricing(db):
     for table,names in (
+        ('budget_policy',('batch_percent',)),
+        ('batch_run',('idle_only',)),
+        ('batch_step',('reason',)),
         ('usage_ledger',('price_snapshot','sent_at','price_period')),
         ('budget_policy',('time_pricing','idle_input_rate','idle_output_rate','idle_cached_rate','idle_reasoning_rate'))):
         fields={r[1] for r in db.execute('PRAGMA table_info('+table+')')}

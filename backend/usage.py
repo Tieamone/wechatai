@@ -45,8 +45,11 @@ def mark_sent():
             if row['state']=='reserved':
                 if row['lease_until'] is not None and row['lease_until']<time.time():raise HTTPException(429,'请求预留已过期，未发送')
                 if row['batch_id'] is not None:
-                    run=db.execute('SELECT state FROM batch_run WHERE id=?',(row['batch_id'],)).fetchone()
+                    run=db.execute('SELECT state,idle_only FROM batch_run WHERE id=?',(row['batch_id'],)).fetchone()
                     if not run or run['state']!='active':raise HTTPException(429,'批量任务已暂停或取消，未发送')
+                    if run['idle_only'] and not budgets.idle():
+                        from .diagnostics import failure
+                        raise failure(429,'当前不是闲时，等待下一闲时启动','B101')
                 sent_at=time.time();snapshot=json.loads(row['price_snapshot']) if row['price_snapshot'] else None
                 a,b=row['input_rate'],row['output_rate'];period=None
                 if snapshot:

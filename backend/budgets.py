@@ -23,6 +23,7 @@ class Settings(StrictModel):
     cached_rate:int|None=Field(default=None,ge=0,le=1000000000000)
     reasoning_rate:int|None=Field(default=None,ge=0,le=1000000000000)
     time_pricing:bool=False
+    batch_percent:int=Field(default=70,ge=1,le=100)
     idle_input_rate:int|None=Field(default=None,ge=0,le=1000000000000)
     idle_output_rate:int|None=Field(default=None,ge=0,le=1000000000000)
     idle_cached_rate:int|None=Field(default=None,ge=0,le=1000000000000)
@@ -62,9 +63,10 @@ def price_snapshot(settings,config):
     return json.dumps({k:settings[k] for k in ('time_pricing','input_rate','output_rate','cached_rate','reasoning_rate','idle_input_rate','idle_output_rate','idle_cached_rate','idle_reasoning_rate')})
 
 
-def totals(db,*,batch_id=None):
+def totals(db,*,batch_id=None,batch_only=False):
     clause='batch_id=?' if batch_id is not None else 'at>?'
     value=batch_id if batch_id is not None else time.time()-86400
+    if batch_only:clause+=' AND batch_id IS NOT NULL'
     row=db.execute(f'''SELECT COALESCE(SUM(CASE WHEN state='settled' THEN input_tokens+output_tokens
                 ELSE reserved_input+reserved_output END),0) AS tokens,
             COALESCE(SUM(CASE WHEN state='settled' THEN actual_cost ELSE reserved_cost END),0) AS amount,
@@ -98,6 +100,10 @@ def reserve(db,config,input_tokens,output_tokens):
     if settings['enabled']:check_limit(settings,totals(db),input_tokens,output_tokens,estimated)
     batch_id=BATCH.get()
     if batch_id is not None:
+        if settings['enabled']:
+            share={**settings,'token_limit':settings['token_limit']*settings['batch_percent']//100,
+                   'amount_limit':settings['amount_limit']*settings['batch_percent']//100 if settings['amount_limit'] is not None else None}
+            check_limit(share,totals(db,batch_only=True),input_tokens,output_tokens,estimated)
         run=db.execute('SELECT * FROM batch_run WHERE id=?',(batch_id,)).fetchone()
         if not run or run['state']!='active':raise HTTPException(429,'批量任务已暂停或取消')
         if run['model']!=config.get('model') or run['base_url']!=config.get('base_url'):
@@ -124,7 +130,7 @@ def router(path):
         config=load(path.parent)
         with connect(path) as db:
             settings=policy(db)
-            return {'settings':settings,'rolling':totals(db),'token_details':detail_totals(db,time.time()-86400),
+            return {'settings':settings,'rolling':totals(db),'batch_rolling':totals(db,batch_only=True),'token_details':detail_totals(db,time.time()-86400),
                     'current_model':config.get('model',''),'current_base_url':config.get('base_url',''),
                     'price_matches':settings['model']==config.get('model') and settings['base_url']==config.get('base_url') and settings['input_rate'] is not None,
                     'states':{r[0]:r[1] for r in db.execute('SELECT state,count(*) FROM usage_ledger WHERE at>? GROUP BY state',(time.time()-86400,))}}
