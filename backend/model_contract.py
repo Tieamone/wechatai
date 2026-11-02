@@ -25,6 +25,8 @@ JSON 字段名、枚举值、source_ref 和隐私代号保持 schema 规定的�
 上下文有限时保留不确定性，可返回空 memories。不可捏造人物或时间。
 只返回符合 schema 的 JSON，每条记忆引用本次 messages 中的 source_ref。
 不返回原话引文；界面从本地原文取证据。'''
+V3_PROMPT_VERSION='extract-v3-zh'
+SYSTEM_PROMPT_V3=SYSTEM_PROMPT+'\n进一步约束：仅提取跨会话仍有用的明确事实、偏好、约定和重要计划；允许 memories 为空。\n不提取寒暄、玩笑、反话、一次性闲聊；语境不明确的否认和猜测不作为确定事实。\n每条只写一个事实，摘要尽量短，目标不超过 60 个汉字，不重复原话或背景。\ndirect 且 subject=self/peer 时，只引用主体自己的消息。需要另一方的话作为背景，使用 reported 并明确是谁说的；不能把别人的话安到主体头上。\n例：self问“你喜欢咖啡吗”，peer答“喜欢”。若需要同时引用问答，可写“对方在被问及咖啡时表示喜欢”，subject=peer、assertion=reported，并引用问答两条。不得把包含双方的话标成 direct。\n对推测保留“可能/猜测”等不确定语气和 uncertain/inferred 属性；无法确定主体或语境时不提取。\n'
 TOKEN_LIKE = re.compile(r'\[(?:PERSON|PHONE|EMAIL|ADDRESS|ID)[^\]\n]*\]', re.IGNORECASE)
 BROKEN_TOKEN = re.compile(r'\[(?:PERSON|PHONE|EMAIL|ADDRESS|ID)(?=[_\s\]])', re.IGNORECASE)
 
@@ -76,7 +78,7 @@ def current_window(db, job):
             'time_context': 'exact_dates_omitted'}, refs
 
 
-def issue_request(path, job_id, *, claim=False, provider='synthetic'):
+def issue_request(path, job_id, *, claim=False, provider='synthetic',normalize_d304=None):
     """Freeze evidence and optionally claim a window before a bounded model call."""
     with connect(path) as db:
         db.execute('BEGIN IMMEDIATE')
@@ -85,17 +87,40 @@ def issue_request(path, job_id, *, claim=False, provider='synthetic'):
             raise HTTPException(409, '仅可对启用范围中已准备的窗口创建请求')
         payload, refs = current_window(db, job)
         request_id = secrets.token_hex(16)
+        if claim and normalize_d304 is not None:
+            db.execute("UPDATE job SET result_json=json_set(COALESCE(result_json,'{}'),'$.extraction_policy',json(?)) WHERE id=?",(json.dumps({'normalize_d304':normalize_d304,'version':3}),job_id))
         if claim:
             db.execute("UPDATE job SET state='extracting',owner=?,lease_until=? WHERE id=?", (request_id, time.time()+60, job_id))
         stored = {'payload': payload, 'refs': refs}
+        if normalize_d304 is not None:stored['policy']={'normalize_d304':normalize_d304,'version':3}
         db.execute("UPDATE model_request SET state='superseded' WHERE job_id=? AND state='issued'", (job_id,))
         db.execute('INSERT INTO model_request(id,job_id,input_hash,mapping_hash,prompt_version,provider,payload_json) VALUES(?,?,?,?,?,?,?)',
                    (request_id, job_id, digest(stored), mapping_hash(db), PROMPT_VERSION, provider, json.dumps(stored, ensure_ascii=False)))
         return {'request_id': request_id, 'system': SYSTEM_PROMPT, 'data': payload,
-                'response_schema': Extraction.model_json_schema(), 'external_enabled': provider != 'synthetic', 'provider': provider}
+                'response_schema': Extraction.model_json_schema(), 'external_enabled': provider != 'synthetic', 'provider': provider,'policy':stored.get('policy')}
 
 
-def _commit_response(path, request_id, raw_response, *, replay=False, normalize_d304=False):
+
+def role_audit(parsed,roles,refs,enabled):
+    audit={'version':3,'enabled':enabled,'removed_references':0,'dropped_memories':0,'mixed_role_memories':0,
+           'returned_memories':len(parsed.memories),'d304_event_count':0,'items':[]}
+    for index,fact in enumerate(parsed.memories):
+        if len(set(fact.source_refs))!=len(fact.source_refs) or any(r not in refs for r in fact.source_refs):
+            raise diagnostics.failure(422,'返回引用不在本次允许证据集合中','D302',['memories',index,'source_refs'])
+        if fact.assertion!='direct' or fact.subject not in ('self','peer'):continue
+        observed=[roles[r] for r in fact.source_refs]
+        if all(r==fact.subject for r in observed):continue
+        reason='system_role_reference' if 'system' in observed else ('other_role_only' if fact.subject not in observed else 'mixed_roles')
+        action=('mixed_roles' if reason=='mixed_roles' else 'dropped') if enabled else 'rejected'
+        references=[{**refs[r],'role':roles[r]} for r in fact.source_refs]
+        audit['items'].append({'memory_index':index,'reason':'D304','category':reason,'action':action,
+                               'kept':references if action=='mixed_roles' else [],'removed':[],'references':references})
+        audit['dropped_memories']+=int(action=='dropped');audit['mixed_role_memories']+=int(action=='mixed_roles')
+    audit['d304_event_count']=len(audit['items'])
+    return audit
+
+
+def _commit_response(path, request_id, raw_response, *, replay=False, normalize_d304=None):
     """Validate synthetic and real responses against the same evidence boundary."""
     if not isinstance(raw_response, str) or len(raw_response) > 100000:
         raise diagnostics.failure(422, '模型返回过大或类型错误', 'D101')
@@ -128,13 +153,19 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
             raise diagnostics.failure(409, '执行租约已过期', 'D203')
         stored = json.loads(request['payload_json'])
         payload, refs = current_window(db, job)
-        if request['mapping_hash'] != mapping_hash(db) or digest({'payload': payload, 'refs': refs}) != request['input_hash']:
+        frozen=stored.get('policy',{})
+        if not replay and frozen and normalize_d304 is not None and normalize_d304!=frozen['normalize_d304']:
+            raise diagnostics.failure(409,'请求规整策略已冻结','D209')
+        if normalize_d304 is None:normalize_d304=frozen.get('normalize_d304',False)
+        checked={'payload':payload,'refs':refs}
+        if frozen:checked['policy']=frozen
+        if request['mapping_hash'] != mapping_hash(db) or digest(checked) != request['input_hash']:
             raise diagnostics.failure(409, '证据或映射变化，拒绝迟到返回', 'D208')
         if not replay and request['state'] == 'validated':
             if request['result_hash'] != result_hash:
                 raise diagnostics.failure(409, '同一请求不能提交不同结果', 'D209')
             prior=json.loads(job['result_json'] or '{}').get('extraction_audit')
-            if prior and (prior['enabled']!=normalize_d304 or (normalize_d304 and prior.get('version')!=2)):
+            if prior and (prior['enabled']!=normalize_d304 or (normalize_d304 and prior.get('version')!=3)):
                 raise diagnostics.failure(409,'同一请求不能改变规整策略','D209')
             return {'memory_ids': json.loads(request['memory_ids_json']), 'duplicate': True,'audit':prior}
         if not replay and request['state'] != 'issued':
@@ -142,8 +173,9 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
         allowed = {t for m in stored['payload']['messages'] for t in TOKEN.findall(m['text'])}
         mappings = {r['token']: r['value'] for r in db.execute('SELECT token,value FROM entity_value') if r['token'] in allowed}
         ids = []
-        audit={'version':2,'enabled':normalize_d304,'removed_references':0,'dropped_memories':0,'mixed_role_memories':0,'items':[]}
         roles={m['source_ref']:m['role'] for m in payload['messages']}
+        audit=role_audit(parsed,roles,refs,normalize_d304)
+        diagnostics.observe(extraction_audit=audit)
         for index,fact in enumerate(parsed.memories):
             diagnostics.observe(location=['memories',index])
             if request['provider'] != 'synthetic' and not re.search(r'[\u4e00-\u9fff]', fact.summary):
@@ -157,16 +189,10 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
             if not summary.strip():raise diagnostics.failure(422,'记忆内容不能为空','D113',['memories',index,'summary'])
             selected=fact.source_refs
             mixed=False
-            if normalize_d304 and fact.assertion=='direct' and fact.subject in ('self','peer') and all(roles[ref] in ('self','peer') for ref in selected):
-                own=[ref for ref in selected if roles[ref]==fact.subject]
-                mixed=bool(own) and len(own)!=len(selected)
-                if mixed or not own:
-                    references=[{**refs[ref],'role':roles[ref]} for ref in selected]
-                    audit['mixed_role_memories']+=int(mixed)
-                    audit['dropped_memories']+=int(not own)
-                    audit['items'].append({'memory_index':index,'reason':'D304','action':'mixed_roles' if mixed else 'dropped',
-                                           'kept':references if mixed else [],'removed':[],'references':references})
-                if not own:continue
+            event=next((e for e in audit['items'] if e['memory_index']==index),None)
+            if normalize_d304 and event:
+                if event['action']=='dropped':continue
+                mixed=event['action']=='mixed_roles'
             evidence = []
             for ref in selected:
                 source = refs[ref]
@@ -185,11 +211,14 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
 
 
 
-def commit_response(path,request_id,raw_response, *, normalize_d304=False):
+def commit_response(path,request_id,raw_response, *, normalize_d304=None):
     with diagnostics.capture(path,request_id):
         if not diagnostics.CURRENT.get().get('raw'):
             diagnostics.observe(raw=raw_response,raw_kind='extraction')
-        return _commit_response(path,request_id,raw_response,normalize_d304=normalize_d304)
+        try:return _commit_response(path,request_id,raw_response,normalize_d304=normalize_d304)
+        except Exception as error:
+            error.extraction_audit=diagnostics.CURRENT.get().get('extraction_audit')
+            raise
 
 
 def router(path):
