@@ -110,7 +110,7 @@ def complete(config, system, data):
                     diagnostics.observe(response_bytes=len(raw))
                     if len(raw) > 256000:
                         raise diagnostics.failure(502,'模型返回过大','D103')
-                diagnostics.observe(raw=bytes(raw),raw_kind='http_json')
+                diagnostics.observe(raw=retained_response(raw),raw_kind='http_json')
                 return parse_response(raw,settle_usage=True)
     except httpx.TimeoutException:
         raise HTTPException(504, '模型请求超时，未自动重试；可能已产生费用') from None
@@ -136,6 +136,25 @@ def parse_response(raw, *, settle_usage=False):
     if not isinstance(message,dict) or not isinstance(message.get('content'), str):
         raise diagnostics.failure(502,'模型内容不是字符串','D105')
     return choice['message']['content']
+
+
+def retained_response(raw):
+    """Retain visible content and numeric usage, never reasoning text/unknown fields."""
+    try:payload=json.loads(raw)
+    except (ValueError,TypeError):return None
+    if not isinstance(payload,dict):return None
+    usage=payload.get('usage');usage=usage if isinstance(usage,dict) else {}
+    numeric={k:usage.get(k) if type(usage.get(k)) is int else None for k in ('prompt_tokens','completion_tokens','total_tokens')}
+    for parent,keys in (('completion_tokens_details',('reasoning_tokens','text_tokens')),('prompt_tokens_details',('cached_tokens',))):
+        detail=usage.get(parent);detail=detail if isinstance(detail,dict) else {}
+        numeric[parent]={k:detail.get(k) if type(detail.get(k)) is int else None for k in keys}
+    choices=[]
+    for choice in payload.get('choices',[]) if isinstance(payload.get('choices'),list) else []:
+        if not isinstance(choice,dict):continue
+        message=choice.get('message');message=message if isinstance(message,dict) else {}
+        choices.append({'finish_reason':choice.get('finish_reason') if isinstance(choice.get('finish_reason'),str) else None,
+                        'message':{'content':message.get('content') if isinstance(message.get('content'),str) else None}})
+    return json.dumps({'choices':choices,'usage':numeric},ensure_ascii=False).encode('utf-8')
 
 
 def extract_job(path, job_id, config, *, sender=None):
