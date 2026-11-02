@@ -56,3 +56,12 @@ def test_settings_default_off_and_event_only_filter(client):
     commit_response(path,request['request_id'],json.dumps({'memories':[]}))
     assert len(client.get('/api/initializations/1/extraction-audits').json()['items'])==1
     assert client.get('/api/initializations/1/extraction-audits?events_only=true').json()['items']==[]
+
+
+def test_new_invalid_response_does_not_reuse_previous_audit(client):
+    path,_=setup(client)
+    with connect(path) as db:db.execute("UPDATE job SET result_json=? WHERE id=1",(json.dumps({'extraction_audit':{'d304_event_count':99}}),))
+    with pytest.raises(HTTPException):ai_settings.extract_job(path,1,{},sender=lambda *args:'{"memories":[{}]}')
+    with connect(path) as db:
+        saved=json.loads(db.execute('SELECT result_json FROM job WHERE id=1').fetchone()[0])
+        assert 'extraction_audit' not in saved and saved['extraction_policy']['normalize_d304'] is False

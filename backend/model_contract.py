@@ -88,7 +88,7 @@ def issue_request(path, job_id, *, claim=False, provider='synthetic',normalize_d
         payload, refs = current_window(db, job)
         request_id = secrets.token_hex(16)
         if claim and normalize_d304 is not None:
-            db.execute("UPDATE job SET result_json=json_set(COALESCE(result_json,'{}'),'$.extraction_policy',json(?)) WHERE id=?",(json.dumps({'normalize_d304':normalize_d304,'version':3}),job_id))
+            db.execute("UPDATE job SET result_json=json_remove(json_set(COALESCE(result_json,'{}'),'$.extraction_policy',json(?)),'$.extraction_audit') WHERE id=?",(json.dumps({'normalize_d304':normalize_d304,'version':3}),job_id))
         if claim:
             db.execute("UPDATE job SET state='extracting',owner=?,lease_until=? WHERE id=?", (request_id, time.time()+60, job_id))
         stored = {'payload': payload, 'refs': refs}
