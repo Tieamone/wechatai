@@ -157,7 +157,7 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
             if not summary.strip():raise diagnostics.failure(422,'记忆内容不能为空','D113',['memories',index,'summary'])
             selected=fact.source_refs
             mixed=False
-            if normalize_d304 and fact.assertion=='direct' and fact.subject in ('self','peer'):
+            if normalize_d304 and fact.assertion=='direct' and fact.subject in ('self','peer') and all(roles[ref] in ('self','peer') for ref in selected):
                 own=[ref for ref in selected if roles[ref]==fact.subject]
                 mixed=bool(own) and len(own)!=len(selected)
                 if mixed or not own:

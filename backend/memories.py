@@ -72,9 +72,12 @@ def create_memory(db, draft, origin='manual', permitted_sources=frozenset(), *, 
     unique = {(e.message_id, e.message_revision, e.span_start, e.span_end) for e in draft.evidence}
     if len(unique) != len(draft.evidence):
         raise diagnostics.failure(422, '证据片段重复', 'D305')
-    mixed_allowed=allow_mixed_roles and origin in ('model','synthetic') and any(
-        db.execute('SELECT sender_role FROM message WHERE id=?',(e.message_id,)).fetchone()[0]==draft.subject
-        for e in draft.evidence if db.execute('SELECT 1 FROM message WHERE id=?',(e.message_id,)).fetchone())
+    roles=[]
+    if allow_mixed_roles:
+        for e in draft.evidence:
+            role=db.execute('SELECT sender_role FROM message WHERE id=?',(e.message_id,)).fetchone()
+            roles.append(role[0] if role else None)
+    mixed_allowed=allow_mixed_roles and origin in ('model','synthetic') and draft.subject in roles and set(roles)<={'self','peer'}
     for evidence in draft.evidence:
         row = db.execute('SELECT * FROM message WHERE id=?', (evidence.message_id,)).fetchone()
         if not row or row['type'] != 'text':

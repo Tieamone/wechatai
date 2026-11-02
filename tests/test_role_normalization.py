@@ -64,7 +64,7 @@ def test_all_dropped_window_has_visible_audit(client):
 def test_manual_memory_remains_strict(client):
     path,_=setup(client)
     with connect(path) as db:
-        draft=MemoryDraft(summary='合成',subject='peer',polarity='positive',assertion='direct',temporal_kind='fact',evidence=[Evidence(message_id=2,message_revision=1,span_start=0,span_end=2)])
+        draft=MemoryDraft(summary='合成',subject='peer',polarity='positive',assertion='direct',temporal_kind='fact',evidence=[Evidence(message_id=i,message_revision=1,span_start=0,span_end=2) for i in (1,2)])
         with pytest.raises(HTTPException) as error:create_memory(db,draft,allow_mixed_roles=True)
         assert error.value.diagnostic['code']=='D304'
 
@@ -99,3 +99,13 @@ def test_preview_preserves_quotes_escapes_content_and_does_not_write(client,tmp_
         assert db.execute('SELECT count(*) FROM memory').fetchone()[0]==0
         assert db.execute('SELECT count(*) FROM memory_review').fetchone()[0]==0
         assert db.execute('SELECT count(*) FROM usage_ledger').fetchone()[0]==0
+
+
+def test_system_role_does_not_get_mixed_role_exception(client):
+    path,_=setup(client)
+    with connect(path) as db:db.execute("UPDATE message SET sender_role='system' WHERE id=2")
+    request=issue_request(path,1)
+    with pytest.raises(HTTPException) as error:
+        commit_response(path,request['request_id'],json.dumps({'memories':[result(refs=['s1','s2'])]}),normalize_d304=True)
+    assert error.value.diagnostic['code']=='D304'
+    with connect(path) as db:assert db.execute('SELECT count(*) FROM memory').fetchone()[0]==0
