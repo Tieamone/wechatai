@@ -39,6 +39,9 @@ try{
   await page.getByRole('button',{name:'启动有预算的批量提炼'}).click();
   await expect.poll(async()=>{const rows=await api('batches');return rows[0]?.state},{timeout:15000}).toBe('completed');
   const first=(await api('batches'))[0];assert.equal(first.counts.done,2);assert.equal(first.usage.tokens,60);assert.equal(first.usage.amount,80);
+  await page.getByText('查看逐窗引用规整记录',{exact:true}).click();
+  await page.getByRole('button',{name:'加载最近记录',exact:true}).click();
+  await expect(page.getByText(/剔除引用 0 条，丢弃记忆 0 条/)).toHaveCount(2);
   await page.getByLabel('批量窗口数').fill('1');
   await page.getByLabel('本批 Token 上限').fill('4096');
   await page.getByRole('button',{name:'启动有预算的批量提炼'}).click();

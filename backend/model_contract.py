@@ -58,15 +58,15 @@ def current_window(db, job):
     for index, entry in enumerate(inputs['messages']):
         row = db.execute('SELECT * FROM message WHERE id=?', (entry['id'],)).fetchone()
         if not row or row['revision'] != entry['revision'] or row['type'] != 'text':
-            raise HTTPException(409, '请求证据已过期')
+            raise diagnostics.failure(409, '请求证据已过期', 'D204')
         source_rows.append(row)
         if sum(len(r['text']) for r in source_rows) > MAX_WINDOW_CHARS:
-            raise HTTPException(409, '上下文超过字符上限，请选择更小范围')
+            raise diagnostics.failure(409, '上下文超过字符上限，请选择更小范围', 'D207')
         if db.execute('SELECT 1 FROM suppressed_evidence WHERE message_id=? AND message_revision=?', (row['id'], row['revision'])).fetchone():
-            raise HTTPException(409, '证据已被纠错停用')
+            raise diagnostics.failure(409, '证据已被纠错停用', 'D205')
         checked = preview(db, row['text'])
         if checked['status'] == 'blocked':
-            raise HTTPException(409, '上下文含未处理隐私疑点')
+            raise diagnostics.failure(409, '上下文含未处理隐私疑点', 'D206')
         ref = f's{index+1}'
         # No account paths, source IDs, mapping values, or exact dates in this initial contract.
         messages.append({'source_ref': ref, 'role': row['sender_role'], 'text': checked['text']})
@@ -95,10 +95,10 @@ def issue_request(path, job_id, *, claim=False, provider='synthetic'):
                 'response_schema': Extraction.model_json_schema(), 'external_enabled': provider != 'synthetic', 'provider': provider}
 
 
-def _commit_response(path, request_id, raw_response, *, replay=False):
+def _commit_response(path, request_id, raw_response, *, replay=False, normalize_d304=False):
     """Validate synthetic and real responses against the same evidence boundary."""
     if not isinstance(raw_response, str) or len(raw_response) > 100000:
-        raise HTTPException(422, '模型返回过大或类型错误')
+        raise diagnostics.failure(422, '模型返回过大或类型错误', 'D101')
     try:
         decoded=json.loads(raw_response)
         if isinstance(decoded,dict) and isinstance(decoded.get('memories'),list):
@@ -120,57 +120,75 @@ def _commit_response(path, request_id, raw_response, *, replay=False):
         db.execute('BEGIN' if replay else 'BEGIN IMMEDIATE')
         request = db.execute('SELECT * FROM model_request WHERE id=?', (request_id,)).fetchone()
         if not request:
-            raise HTTPException(404, '请求不存在')
+            raise diagnostics.failure(404, '请求不存在', 'D201')
         job = db.execute('SELECT j.*,i.state AS initialization_state FROM job j JOIN initialization i ON i.id=j.initialization_id WHERE j.id=?', (request['job_id'],)).fetchone()
         if not replay and (job['initialization_state'] != 'active' or job['state'] not in ('prepared', 'extracting', 'validated_synthetic', 'validated_model')):
-            raise HTTPException(409, '任务已暂停、取消或失效')
+            raise diagnostics.failure(409, '任务已暂停、取消或失效', 'D202')
         if not replay and job['state'] == 'extracting' and (job['owner'] != request_id or job['lease_until'] <= time.time()):
-            raise HTTPException(409, '执行租约已过期')
+            raise diagnostics.failure(409, '执行租约已过期', 'D203')
         stored = json.loads(request['payload_json'])
         payload, refs = current_window(db, job)
         if request['mapping_hash'] != mapping_hash(db) or digest({'payload': payload, 'refs': refs}) != request['input_hash']:
-            raise HTTPException(409, '证据或映射变化，拒绝迟到返回')
+            raise diagnostics.failure(409, '证据或映射变化，拒绝迟到返回', 'D208')
         if not replay and request['state'] == 'validated':
             if request['result_hash'] != result_hash:
-                raise HTTPException(409, '同一请求不能提交不同结果')
-            return {'memory_ids': json.loads(request['memory_ids_json']), 'duplicate': True}
+                raise diagnostics.failure(409, '同一请求不能提交不同结果', 'D209')
+            prior=json.loads(job['result_json'] or '{}').get('extraction_audit')
+            if prior and prior['enabled']!=normalize_d304:
+                raise diagnostics.failure(409,'同一请求不能改变规整策略','D209')
+            return {'memory_ids': json.loads(request['memory_ids_json']), 'duplicate': True,'audit':prior}
         if not replay and request['state'] != 'issued':
-            raise HTTPException(409, '请求已被新请求替代')
+            raise diagnostics.failure(409, '请求已被新请求替代', 'D210')
         allowed = {t for m in stored['payload']['messages'] for t in TOKEN.findall(m['text'])}
         mappings = {r['token']: r['value'] for r in db.execute('SELECT token,value FROM entity_value') if r['token'] in allowed}
         ids = []
+        audit={'version':1,'enabled':normalize_d304,'removed_references':0,'dropped_memories':0,'items':[]}
+        roles={m['source_ref']:m['role'] for m in payload['messages']}
         for index,fact in enumerate(parsed.memories):
             diagnostics.observe(location=['memories',index])
             if request['provider'] != 'synthetic' and not re.search(r'[\u4e00-\u9fff]', fact.summary):
-                raise HTTPException(422, '模型摘要未使用中文，结果未保存；请重试此窗口')
+                raise diagnostics.failure(422, '模型摘要未使用中文，结果未保存；请重试此窗口', 'D301')
             if len(fact.source_refs) != len(set(fact.source_refs)) or any(ref not in refs for ref in fact.source_refs):
-                raise HTTPException(422, '返回引用不在本次允许证据集合中')
+                raise diagnostics.failure(422, '返回引用不在本次允许证据集合中', 'D302')
             tokens = TOKEN_LIKE.findall(fact.summary)
             if any(token not in allowed for token in tokens) or BROKEN_TOKEN.search(TOKEN.sub('', fact.summary)):
-                raise HTTPException(422, '返回包含未知或改写的代号')
+                raise diagnostics.failure(422, '返回包含未知或改写的代号', 'D303')
             summary = TOKEN.sub(lambda m: mappings[m[0]], fact.summary)
+            if not summary.strip():raise diagnostics.failure(422,'记忆内容不能为空','D113',['memories',index,'summary'])
+            selected=fact.source_refs
+            if normalize_d304 and fact.assertion=='direct' and fact.subject in ('self','peer'):
+                selected=[ref for ref in fact.source_refs if roles[ref]==fact.subject]
+                removed=[ref for ref in fact.source_refs if ref not in selected]
+                if removed:
+                    def source(ref):return {**refs[ref],'role':roles[ref]}
+                    audit['removed_references']+=len(removed)
+                    audit['dropped_memories']+=int(not selected)
+                    audit['items'].append({'memory_index':index,'reason':'D304','action':'filtered' if selected else 'dropped',
+                                           'kept':[source(ref) for ref in selected],'removed':[source(ref) for ref in removed]})
+                if not selected:continue
             evidence = []
-            for ref in fact.source_refs:
+            for ref in selected:
                 source = refs[ref]
                 row = db.execute('SELECT text FROM message WHERE id=?', (source['id'],)).fetchone()
                 evidence.append(Evidence(message_id=source['id'], message_revision=source['revision'], span_start=0, span_end=len(row['text'])))
             draft = MemoryDraft(summary=summary, subject=fact.subject, polarity=fact.polarity,
                                 assertion=fact.assertion, temporal_kind=fact.temporal_kind, evidence=evidence)
             ids.append(create_memory(db, draft, origin='synthetic' if request['provider']=='synthetic' else 'model',validate_only=replay)['id'])
-        if replay:return {'valid':True,'memory_count':len(ids),'lifecycle_checks':'not_replayed'}
+        if replay:return {'valid':True,'memory_count':len(ids),'lifecycle_checks':'not_replayed','audit':audit}
         state = 'validated_synthetic' if request['provider']=='synthetic' else 'validated_model'
-        db.execute("UPDATE job SET state=?,owner=NULL,lease_until=NULL WHERE id=?", (state, job['id']))
+        result=json.loads(job['result_json'] or '{}');result['extraction_audit']=audit
+        db.execute("UPDATE job SET state=?,result_json=?,owner=NULL,lease_until=NULL WHERE id=?", (state,json.dumps(result), job['id']))
         db.execute("UPDATE model_request SET state='validated',result_hash=?,memory_ids_json=? WHERE id=?",
                    (result_hash, json.dumps(ids), request_id))
-    return {'memory_ids': ids, 'duplicate': False}
+    return {'memory_ids': ids, 'duplicate': False,'audit':audit}
 
 
 
-def commit_response(path,request_id,raw_response):
+def commit_response(path,request_id,raw_response, *, normalize_d304=False):
     with diagnostics.capture(path,request_id):
         if not diagnostics.CURRENT.get().get('raw'):
             diagnostics.observe(raw=raw_response,raw_kind='extraction')
-        return _commit_response(path,request_id,raw_response)
+        return _commit_response(path,request_id,raw_response,normalize_d304=normalize_d304)
 
 
 def router(path):
