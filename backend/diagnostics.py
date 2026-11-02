@@ -45,7 +45,7 @@ def save(path,request_id,error,values):
     diagnostic=details(error,values)
     raw=values.get('raw')
     if isinstance(raw,str):raw=raw.encode('utf-8')
-    size=len(raw) if isinstance(raw,bytes) else values.get('response_bytes')
+    size=values.get('response_bytes',len(raw) if isinstance(raw,bytes) else None)
     body={'id':uuid.uuid4().hex,'request_id':request_id,'at':datetime.now(timezone.utc).isoformat(),
           **diagnostic,'response_bytes':size,'completion_tokens':values.get('completion_tokens'),
           'extraction_audit':values.get('extraction_audit'),'memory_count':values.get('memory_count'),'raw_kind':values.get('raw_kind','extraction'),
@@ -54,7 +54,7 @@ def save(path,request_id,error,values):
         prefix=values.get('raw_prefix')
         body.update(http_status=values.get('http_status'),content_type=values.get('content_type'),
                     raw_prefix=prefix.encode('utf-8')[:2048].decode('utf-8',errors='ignore') if isinstance(prefix,str) else None,
-                    prefix_omitted_reason=values.get('prefix_omitted_reason'))
+                    prefix_omitted_reason=(values.get('prefix_omitted_reason') or 'cannot_exclude_reasoning_text') if not prefix else None)
         body['raw']=None
     with LOCK:
         target=directory(path);target.mkdir(exist_ok=True)
