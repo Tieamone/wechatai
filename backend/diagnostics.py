@@ -68,10 +68,10 @@ def save(path,request_id,error,values):
 @contextmanager
 def capture(path,request_id):
     if CURRENT.get() is not None:
-        yield
+        yield CURRENT.get()
         return
     values={};token=CURRENT.set(values)
-    try:yield
+    try:yield values
     except Exception as error:
         # Admission failures are not rejected model responses.
         code=details(error,values)['code']

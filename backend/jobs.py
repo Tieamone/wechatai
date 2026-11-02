@@ -195,7 +195,7 @@ def router(path: Path):
                     'real_extracted':sum(states=={'validated_model'} for states in valid),
                 }
                 item['extraction_complete'] = bool(coverage) and len(valid)==len(coverage) and all(states=={'validated_model'} for states in valid)
-                item['jobs'] = [dict(r) for r in db.execute("SELECT id,state,attempt,error,json_extract(result_json,'$.extraction_policy.normalize_d304') AS normalization FROM job WHERE initialization_id=? ORDER BY id LIMIT 200", (row['id'],))]
+                item['jobs'] = [dict(r) for r in db.execute("SELECT id,state,attempt,error,json_extract(result_json,'$.extraction_policy.normalize_d304') AS normalization,json_extract(result_json,'$.extraction_policy.thinking_mode') AS thinking_mode,json_extract(result_json,'$.thinking_observation.status') AS thinking_status,json_extract(result_json,'$.thinking_observation.reasoning_tokens') AS reasoning_tokens FROM job WHERE initialization_id=? ORDER BY id LIMIT 200", (row['id'],))]
                 items.append(item)
             return items
 

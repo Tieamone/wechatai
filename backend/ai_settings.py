@@ -5,6 +5,7 @@ from ctypes import wintypes
 import json
 import threading
 import time
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -44,6 +45,7 @@ class Settings(StrictModel):
     api_key: SecretStr = SecretStr('')
     enabled: bool = False
     normalize_d304: bool = False
+    thinking_mode: Literal['default','off'] = 'default'
 
     @field_validator('base_url')
     @classmethod
@@ -67,7 +69,7 @@ def load(directory):
 
 
 def public(config):
-    return {**{key:config[key] for key in ('base_url','model','enabled')}, 'normalize_d304':bool(config.get('normalize_d304',False)), 'has_key':bool(config.get('key_encrypted'))}
+    return {**{key:config[key] for key in ('base_url','model','enabled')}, 'thinking_mode':config.get('thinking_mode','default'), 'normalize_d304':bool(config.get('normalize_d304',False)), 'has_key':bool(config.get('key_encrypted'))}
 
 
 def save(directory, body):
@@ -89,6 +91,13 @@ def save(directory, body):
         return public(config)
 
 
+def request_body(config,system,data):
+    body={'model':config['model'],'stream':False,'max_tokens':4096,'response_format':{'type':'json_object'},
+          'messages':[{'role':'system','content':system},{'role':'user','content':json.dumps(data,ensure_ascii=False)}]}
+    if config.get('_extraction_thinking_mode','default')=='off':body['enable_thinking']=False
+    return body
+
+
 def complete(config, system, data):
     from .usage import trace, mark_sent
     key = protect(base64.b64decode(config['key_encrypted']), decrypt=True).decode()
@@ -97,13 +106,17 @@ def complete(config, system, data):
             with client.stream('POST', config['base_url']+'/chat/completions',
                                extensions={'trace':trace},
                                headers={'Authorization':'Bearer '+key},
-                               json={'model':config['model'], 'stream':False, 'max_tokens':4096,
-                                     'response_format':{'type':'json_object'},
-                                     'messages':[{'role':'system','content':system},
-                                                 {'role':'user','content':json.dumps(data, ensure_ascii=False)}]}) as response:
+                               json=request_body(config,system,data)) as response:
                 mark_sent()
                 diagnostics.observe(http_status=response.status_code,content_type=response.headers.get('content-type','')[:120])
                 if response.status_code != 200:
+                    if response.status_code in (400,422) and config.get('_extraction_thinking_mode')=='off':
+                        prefix=bytearray()
+                        for chunk in response.iter_bytes():
+                            prefix.extend(chunk[:max(0,4096-len(prefix))])
+                            if len(prefix)>=4096:break
+                        if b'enable_thinking' in prefix.lower():
+                            raise diagnostics.failure(502,'供应商拒绝思考开关参数；未回退或重试，请核对当前精确模型支持情况','D401')
                     raise HTTPException(502, f'模型接口返回 HTTP {response.status_code}，请检查地址、密钥、模型和余额')
                 raw = bytearray()
                 for chunk in response.iter_bytes():
@@ -135,6 +148,8 @@ def parse_response(raw, *, settle_usage=False):
     usage=payload.get('usage')
     completion=usage.get('completion_tokens') if isinstance(usage,dict) else None
     diagnostics.observe(completion_tokens=completion if type(completion) is int and completion>=0 else None)
+    from .usage import token_details
+    diagnostics.observe(reasoning_tokens=token_details(usage)['reasoning_tokens'])
     try:choice = payload['choices'][0]
     except (KeyError,IndexError,TypeError):raise diagnostics.failure(502,'模型返回结构不完整','D106') from None
     if not isinstance(choice,dict):raise diagnostics.failure(502,'模型返回结构不完整','D106')
@@ -166,15 +181,21 @@ def retained_response(raw):
 
 
 def extract_job(path, job_id, config, *, sender=None):
-    request = issue_request(path, job_id, claim=True, provider='compatible',normalize_d304=bool(config.get('normalize_d304',False)))
+    request = issue_request(path, job_id, claim=True, provider='compatible',normalize_d304=bool(config.get('normalize_d304',False)),thinking_mode=config.get('thinking_mode','default'))
+    config={**config,'_extraction_thinking_mode':request['policy']['thinking_mode']}
     try:
         with connect(path) as db:
             if not db.execute("SELECT 1 FROM job WHERE id=? AND state='extracting' AND owner=? AND lease_until>?",(job_id,request['request_id'],time.time())).fetchone():
                 raise HTTPException(409,'提炼任务已取消或租约失效，未发送请求')
         from .usage import invoke
         send=sender or (lambda c,s,d:invoke(path,c,s,d,kind='manual',sender=complete))
-        with diagnostics.capture(path,request['request_id']):
+        with diagnostics.capture(path,request['request_id']) as observed:
             response = send(config, request['system']+'\nJSON schema:\n'+json.dumps(request['response_schema']), request['data'])
+            reasoning=observed.get('reasoning_tokens')
+            observation={'requested':request['policy']['thinking_mode'],'reasoning_tokens':reasoning,
+                         'status':'zero_reported' if reasoning==0 else 'reasoning_reported' if reasoning is not None else 'unknown'}
+            with connect(path) as db:
+                db.execute("UPDATE job SET result_json=json_set(COALESCE(result_json,'{}'),'$.thinking_observation',json(?)) WHERE id=? AND owner=?",(json.dumps(observation),job_id,request['request_id']))
             return commit_response(path, request['request_id'], response)
     except Exception as error:
         with connect(path) as db:
@@ -184,7 +205,8 @@ def extract_job(path, job_id, config, *, sender=None):
                 result=json.loads(existing or '{}');result['extraction_audit']=audit
                 db.execute('UPDATE job SET result_json=? WHERE id=?',(json.dumps(result),job_id))
             limited=isinstance(error,HTTPException) and error.status_code==429
-            db.execute("UPDATE job SET state=?,error=?,owner=NULL,lease_until=NULL WHERE id=? AND state='extracting' AND owner=?", ('prepared' if limited else 'failed','budget_limit' if limited else 'model_call_failed',job_id, request['request_id']))
+            code=diagnostics.details(error)['code']
+            db.execute("UPDATE job SET state=?,error=?,owner=NULL,lease_until=NULL WHERE id=? AND state='extracting' AND owner=?", ('prepared' if limited else 'failed','budget_limit' if limited else 'D401' if code=='D401' else 'model_call_failed',job_id, request['request_id']))
             db.execute("UPDATE model_request SET state='failed' WHERE id=? AND state='issued'", (request['request_id'],))
         raise
 

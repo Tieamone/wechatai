@@ -16,7 +16,7 @@ export function Tasks({api,run,busy,selected,onExtracted}:{api:(p:string,m?:stri
   const hasRange=items.some(i=>i.state==='active'||i.state==='paused');
   const refresh=async()=>{setItems(await api('initializations'));setWorker(await api('worker'))};
   const labels:Record<string,string>={extracting:'正在提炼',pending:'等待处理',running:'处理中',prepared:'准备完成（未提炼）',validated_model:'AI 提炼完成',validated_synthetic:'合成返回验证完成',failed:'失败',blocked_privacy:'隐私待处理',cancelled:'已取消',active:'启用',paused:'已暂停'};
-  const errorLabels:Record<string,string>={budget_limit:'预算不足，尚未发送；请核对预算设置',model_call_failed:'模型调用或返回失败，请核对后再重试',interrupted:'上次运行中断，未自动重试'};
+  const errorLabels:Record<string,string>={D401:'供应商拒绝关闭思考参数，未回退或重试',budget_limit:'预算不足，尚未发送；请核对预算设置',model_call_failed:'模型调用或返回失败，请核对后再重试',interrupted:'上次运行中断，未自动重试'};
   const warningLabels:Record<string,string>={conversation_has_unprocessed_nontext:'会话含未处理的图片、语音等非文字内容',time_gap_over_30_minutes:'窗口内消息间隔超过 30 分钟',bounded_or_selected_history:'窗口或选择范围有限'};
   return <section><h2>历史初始化任务</h2><p>固定当前历史范围并准备上下文。每个窗口最多 12 条、重叠 2 条；准备完成不等于已提炼。先配置 AI，预览输入后按窗口手动提炼。</p>
     <p>当前提炼角色处理：{policy?'启用':'关闭'}；每次请求冻结策略，已发出的请求不受之后设置变化影响。</p>
@@ -35,6 +35,7 @@ export function Tasks({api,run,busy,selected,onExtracted}:{api:(p:string,m?:stri
       {i.context_warnings?.length>0&&<p>上下文限制：{i.context_warnings.map((w:string)=>warningLabels[w]||w).join('；')}。请结合原话核对。</p>}
       {i.state!=='cancelled'&&(['pause','resume','retry','cancel'] as const).map(a=><button disabled={busy} className="secondary" key={a} onClick={()=>run(async()=>{await api(`initializations/${i.id}/control`,'POST',{action:a});await refresh()})}>{{pause:'暂停',resume:'恢复',retry:'重试失败/阻断',cancel:'取消'}[a]}</button>)}
       {i.jobs.filter((j:Row)=>j.normalization!==null).map((j:Row)=><small key={`policy-${j.id}`}>窗口 #{j.id} 请求策略：{j.normalization?'启用':'关闭'}。</small>)}
+      {i.jobs.filter((j:Row)=>j.thinking_mode).map((j:Row)=><p key={`thinking-${j.id}`}>窗口 #{j.id} 思考参数：{j.thinking_mode==='off'?'请求关闭':'维持默认'}；{j.thinking_status==='zero_reported'?'供应商报告推理用量为零，尚不能单独证明质量或计费效果':j.thinking_status==='reasoning_reported'?`仍报告推理用量 ${j.reasoning_tokens} Token`:'推理用量未知，不能确认是否生效'}。</p>)}
       {i.jobs.filter((j:Row)=>j.error).map((j:Row)=><p key={j.id}>窗口 #{j.id}：{errorLabels[j.error]||'请核对窗口状态与原文'}（尝试 {j.attempt} 次）</p>)}
       <details><summary>查看逐窗引用规整记录</summary><p>在线角色处理默认关闭，当前状态见上方。记录只含数量、原因、消息 ID、版本和角色；离线报告不会写入这里。</p>
         <button disabled={busy} onClick={()=>run(async()=>setAudits({...audits,[i.id]:await api(`initializations/${i.id}/extraction-audits`)}))}>加载最近记录</button><button disabled={busy} onClick={()=>run(async()=>setAudits({...audits,[i.id]:await api(`initializations/${i.id}/extraction-audits?events_only=true`)}))}>只看有事件的窗口</button>
