@@ -10,14 +10,16 @@ export function Tasks({api,run,busy,selected,onExtracted}:{api:(p:string,m?:stri
   const [request,setRequest]=useState<Row|null>(null);
   const [loaded,setLoaded]=useState(false);
   const [pollError,setPollError]=useState('');
+  const [policy,setPolicy]=useState(false);
   const [audits,setAudits]=useState<Record<number,any>>({});
-  usePolling(api,['initializations','worker'],([i,w])=>{setItems(i);setWorker(w);setLoaded(true);setPollError('')},()=>setPollError('任务进度刷新失败，当前显示上次数据。'),5000);
+  usePolling(api,['initializations','worker','ai/settings'],([i,w,a])=>{setPolicy(!!a.normalize_d304);setItems(i);setWorker(w);setLoaded(true);setPollError('')},()=>setPollError('任务进度刷新失败，当前显示上次数据。'),5000);
   const hasRange=items.some(i=>i.state==='active'||i.state==='paused');
   const refresh=async()=>{setItems(await api('initializations'));setWorker(await api('worker'))};
   const labels:Record<string,string>={extracting:'正在提炼',pending:'等待处理',running:'处理中',prepared:'准备完成（未提炼）',validated_model:'AI 提炼完成',validated_synthetic:'合成返回验证完成',failed:'失败',blocked_privacy:'隐私待处理',cancelled:'已取消',active:'启用',paused:'已暂停'};
   const errorLabels:Record<string,string>={budget_limit:'预算不足，尚未发送；请核对预算设置',model_call_failed:'模型调用或返回失败，请核对后再重试',interrupted:'上次运行中断，未自动重试'};
   const warningLabels:Record<string,string>={conversation_has_unprocessed_nontext:'会话含未处理的图片、语音等非文字内容',time_gap_over_30_minutes:'窗口内消息间隔超过 30 分钟',bounded_or_selected_history:'窗口或选择范围有限'};
   return <section><h2>历史初始化任务</h2><p>固定当前历史范围并准备上下文。每个窗口最多 12 条、重叠 2 条；准备完成不等于已提炼。先配置 AI，预览输入后按窗口手动提炼。</p>
+    <p>当前提炼角色处理：{policy?'启用':'关闭'}；每次请求冻结策略，已发出的请求不受之后设置变化影响。</p>
     <button disabled={busy||!loaded||hasRange} onClick={()=>run(async()=>{await api('initializations','POST',{mode:'full'});await refresh()})}>创建全量范围</button>
     <button disabled={busy||!loaded||hasRange||selected.length===0} onClick={()=>run(async()=>{await api('initializations','POST',{mode:'batch',message_ids:selected.map(m=>m.id)});await refresh()})}>创建所选消息分批范围</button>
     <button disabled={busy} className="secondary" onClick={()=>run(async()=>{await api('initializations/process-next','POST');await refresh()})}>处理下一窗口</button>
@@ -32,13 +34,14 @@ export function Tasks({api,run,busy,selected,onExtracted}:{api:(p:string,m?:stri
       {i.message_coverage?.scope>0&&<div><small>已提炼 {i.message_coverage.real_extracted} / {i.message_coverage.scope} 条消息</small><progress className="coverage-progress" aria-label="历史消息提炼覆盖" value={i.message_coverage.real_extracted} max={i.message_coverage.scope}/></div>}
       {i.context_warnings?.length>0&&<p>上下文限制：{i.context_warnings.map((w:string)=>warningLabels[w]||w).join('；')}。请结合原话核对。</p>}
       {i.state!=='cancelled'&&(['pause','resume','retry','cancel'] as const).map(a=><button disabled={busy} className="secondary" key={a} onClick={()=>run(async()=>{await api(`initializations/${i.id}/control`,'POST',{action:a});await refresh()})}>{{pause:'暂停',resume:'恢复',retry:'重试失败/阻断',cancel:'取消'}[a]}</button>)}
+      {i.jobs.filter((j:Row)=>j.normalization!==null).map((j:Row)=><small key={`policy-${j.id}`}>窗口 #{j.id} 请求策略：{j.normalization?'启用':'关闭'}。</small>)}
       {i.jobs.filter((j:Row)=>j.error).map((j:Row)=><p key={j.id}>窗口 #{j.id}：{errorLabels[j.error]||'请核对窗口状态与原文'}（尝试 {j.attempt} 次）</p>)}
-      <details><summary>查看逐窗引用规整记录</summary><p>在线规整当前默认关闭。记录只含数量、原因、消息 ID、版本和角色；离线报告不会写入这里。</p>
-        <button disabled={busy} onClick={()=>run(async()=>setAudits({...audits,[i.id]:await api(`initializations/${i.id}/extraction-audits`)}))}>加载最近记录</button>
-        {audits[i.id]?.items.map((entry:any)=><article key={entry.job_id}><p>窗口 #{entry.job_id}：剔除引用 {entry.audit.removed_references} 条，丢弃记忆 {entry.audit.dropped_memories} 条，混合角色 {entry.audit.mixed_role_memories||0} 条；规整{entry.audit.enabled?'启用':'关闭'}。</p>
-          {entry.audit.items.map((a:any)=><p key={a.memory_index}>第 {a.memory_index+1} 条记忆：{a.action==='dropped'?'丢弃此条':a.action==='mixed_roles'?'完整引用保留，混合角色待核对':'旧版过滤记录'}；D304 主体与证据角色不一致。保留证据：{a.kept.map((r:any)=>`#${r.id} v${r.revision} ${r.role==='self'?'本人':r.role==='peer'?'对方':'未知'}`).join('、')||'无'}；移除：{a.removed.length} 条。</p>)}</article>)}
-        {audits[i.id]?.items.length===0&&<p>尚无已提交的规整记录。</p>}
-        {audits[i.id]?.next_before_id&&<button disabled={busy} onClick={()=>run(async()=>{const more=await api(`initializations/${i.id}/extraction-audits?before_id=${audits[i.id].next_before_id}`);setAudits({...audits,[i.id]:{...more,items:[...audits[i.id].items,...more.items]}})})}>加载更早记录</button>}
+      <details><summary>查看逐窗引用规整记录</summary><p>在线角色处理默认关闭，当前状态见上方。记录只含数量、原因、消息 ID、版本和角色；离线报告不会写入这里。</p>
+        <button disabled={busy} onClick={()=>run(async()=>setAudits({...audits,[i.id]:await api(`initializations/${i.id}/extraction-audits`)}))}>加载最近记录</button><button disabled={busy} onClick={()=>run(async()=>setAudits({...audits,[i.id]:await api(`initializations/${i.id}/extraction-audits?events_only=true`)}))}>只看有事件的窗口</button>
+        {audits[i.id]?.items.map((entry:any)=><article key={entry.job_id}><p>窗口 #{entry.job_id}：D304 事件 {entry.audit.d304_event_count??entry.audit.items.length} 次，剔除引用 {entry.audit.removed_references} 条，丢弃记忆 {entry.audit.dropped_memories} 条，混合角色 {entry.audit.mixed_role_memories||0} 条；规整{entry.audit.enabled?'启用':'关闭'}。</p>
+          {entry.audit.items.map((a:any)=><p key={a.memory_index}>第 {a.memory_index+1} 条记忆：{a.action==='dropped'?'丢弃此条':a.action==='mixed_roles'?'完整引用保留，混合角色待核对':a.action==='rejected'?'严格校验拒绝':'旧版过滤记录'}；D304 {a.category==='system_role_reference'?'引用包含系统角色':a.category==='other_role_only'?'仅引用另一方原文':'主体与证据角色不一致'}。保留证据：{a.kept.map((r:any)=>`#${r.id} v${r.revision} ${r.role==='self'?'本人':r.role==='peer'?'对方':'未知'}`).join('、')||'无'}；移除：{a.removed.length} 条。</p>)}</article>)}
+        {audits[i.id]?.items.length===0&&<p>尚无符合条件的审计记录。</p>}
+        {audits[i.id]?.next_before_id&&<button disabled={busy} onClick={()=>run(async()=>{const more=await api(`initializations/${i.id}/extraction-audits?before_id=${audits[i.id].next_before_id}&events_only=${!!audits[i.id].events_only}`);setAudits({...audits,[i.id]:{...more,items:[...audits[i.id].items,...more.items]}})})}>加载更早记录</button>}
       </details>
       {i.jobs.filter((j:Row)=>j.state==='prepared').map((j:Row)=><div key={j.id}><button disabled={busy} className="secondary" onClick={()=>run(async()=>setRequest(await api(`model-requests/preview/${j.id}`,'POST')))}>预览窗口 #{j.id} 模型输入</button><button disabled={busy} onClick={()=>run(async()=>{setExtracting(j.id);try{await api(`ai/extract/${j.id}`,'POST');await refresh();await onExtracted()}finally{setExtracting(null)}})}>用 AI 提炼此窗口 #{j.id}</button><small>点击将发送此窗口隐私处理后的聊天，可能产生费用。</small></div>)}
     </article>)}

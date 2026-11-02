@@ -5,11 +5,12 @@ export function AISettings({api}:{api:(p:string,m?:string,b?:unknown)=>Promise<a
   const [model,setModel]=useState('');
   const [key,setKey]=useState('');
   const [enabled,setEnabled]=useState(false);
+  const [normalize,setNormalize]=useState(false);
   const [saved,setSaved]=useState(false);
   const [busy,setBusy]=useState(false);
   const [message,setMessage]=useState('');
   const [error,setError]=useState('');
-  function fill(s:any){setUrl(s.base_url);setModel(s.model);setEnabled(s.enabled);setSaved(s.has_key);setKey('')}
+  function fill(s:any){setUrl(s.base_url);setModel(s.model);setEnabled(s.enabled);setNormalize(!!s.normalize_d304);setSaved(s.has_key);setKey('')}
   useEffect(()=>{let active=true;api('ai/settings').then(s=>{if(active)fill(s)}).catch(e=>{if(active)setError(String(e))});return()=>{active=false}},[api]);
   async function action(fn:()=>Promise<void>){setBusy(true);setMessage('');setError('');try{await fn()}catch(e){setError(String(e))}finally{setBusy(false)}}
   return <section><h2>AI 模型配置</h2>
@@ -18,7 +19,8 @@ export function AISettings({api}:{api:(p:string,m?:string,b?:unknown)=>Promise<a
     <label>模型名称<input aria-label="模型名称" placeholder="填写供应商提供的模型 ID" value={model} onChange={e=>setModel(e.target.value)}/></label>
     <label>API Key<input aria-label="API Key" type="password" autoComplete="off" value={key} placeholder={saved?'已加密保存；留空保留，换地址需重填':'输入密钥，仅保存在本机'} onChange={e=>setKey(e.target.value)}/></label>
     <label><input type="checkbox" checked={enabled} onChange={e=>setEnabled(e.target.checked)}/>允许模型调用：测试会产生少量请求；提炼会把隐私处理后的所选聊天发给此服务，可能产生费用。</label>
-    <div className="row"><button disabled={busy} onClick={()=>action(async()=>{fill(await api('ai/settings','PUT',{base_url:url,model,api_key:key,enabled}));setMessage('配置已保存；没有发送聊天。')})}>保存模型配置</button>
+    <label><input type="checkbox" checked={normalize} onChange={e=>setNormalize(e.target.checked)}/>启用提炼角色处理（默认关闭）：混合双方证据完整保留待核对；系统角色或仅另一方证据的条目丢弃并记录。人工建记忆规则不变。</label>
+    <div className="row"><button disabled={busy} onClick={()=>action(async()=>{fill(await api('ai/settings','PUT',{base_url:url,model,api_key:key,enabled,normalize_d304:normalize}));setMessage('配置已保存；没有发送聊天。')})}>保存模型配置</button>
     <button disabled={busy||!saved} onClick={()=>action(async()=>{const s=await api('ai/test','POST');setMessage(s.message)})}>测试已保存配置</button>
     <button className="secondary" disabled={busy||!saved} onClick={()=>action(async()=>{fill(await api('ai/settings','DELETE'));setMessage('配置与密钥已删除。')})}>删除模型配置</button></div>
     <p className="muted">密钥由 Windows 当前用户加密保存，不回显。修改后先保存再测试。取消“允许模型调用”并保存可禁止后续请求，已发出的请求无法撤回。</p>

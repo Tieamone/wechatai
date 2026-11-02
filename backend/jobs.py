@@ -153,13 +153,14 @@ def router(path: Path):
     routes = APIRouter(prefix='/api/initializations')
 
     @routes.get('/{initialization_id}/extraction-audits')
-    def extraction_audits(initialization_id:int, before_id:int|None=None):
+    def extraction_audits(initialization_id:int, before_id:int|None=None, events_only:bool=False):
         with connect(path) as db:
             rows=db.execute("""SELECT id,json_extract(result_json,'$.extraction_audit') AS audit FROM job
                 WHERE initialization_id=? AND (? IS NULL OR id<?)
-                AND json_extract(result_json,'$.extraction_audit') IS NOT NULL ORDER BY id DESC LIMIT 101""",
-                (initialization_id,before_id,before_id)).fetchall()
-            return {'items':[{'job_id':r['id'],'audit':json.loads(r['audit'])} for r in rows[:100]],
+                AND json_extract(result_json,'$.extraction_audit') IS NOT NULL
+                AND (?=0 OR COALESCE(json_extract(result_json,'$.extraction_audit.d304_event_count'),json_array_length(json_extract(result_json,'$.extraction_audit.items')),0)>0) ORDER BY id DESC LIMIT 101""",
+                (initialization_id,before_id,before_id,events_only)).fetchall()
+            return {'events_only':events_only,'items':[{'job_id':r['id'],'audit':json.loads(r['audit'])} for r in rows[:100]],
                     'next_before_id':rows[99]['id'] if len(rows)>100 else None}
 
     @routes.post('')
@@ -194,7 +195,7 @@ def router(path: Path):
                     'real_extracted':sum(states=={'validated_model'} for states in valid),
                 }
                 item['extraction_complete'] = bool(coverage) and len(valid)==len(coverage) and all(states=={'validated_model'} for states in valid)
-                item['jobs'] = [dict(r) for r in db.execute('SELECT id,state,attempt,error FROM job WHERE initialization_id=? ORDER BY id LIMIT 200', (row['id'],))]
+                item['jobs'] = [dict(r) for r in db.execute("SELECT id,state,attempt,error,json_extract(result_json,'$.extraction_policy.normalize_d304') AS normalization FROM job WHERE initialization_id=? ORDER BY id LIMIT 200", (row['id'],))]
                 items.append(item)
             return items
 

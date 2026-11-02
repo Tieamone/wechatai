@@ -43,6 +43,7 @@ class Settings(StrictModel):
     model: str = Field(min_length=1, max_length=200)
     api_key: SecretStr = SecretStr('')
     enabled: bool = False
+    normalize_d304: bool = False
 
     @field_validator('base_url')
     @classmethod
@@ -66,7 +67,7 @@ def load(directory):
 
 
 def public(config):
-    return {**{key:config[key] for key in ('base_url','model','enabled')}, 'has_key':bool(config.get('key_encrypted'))}
+    return {**{key:config[key] for key in ('base_url','model','enabled')}, 'normalize_d304':bool(config.get('normalize_d304',False)), 'has_key':bool(config.get('key_encrypted'))}
 
 
 def save(directory, body):
@@ -138,7 +139,7 @@ def parse_response(raw, *, settle_usage=False):
 
 
 def extract_job(path, job_id, config, *, sender=None):
-    request = issue_request(path, job_id, claim=True, provider='compatible')
+    request = issue_request(path, job_id, claim=True, provider='compatible',normalize_d304=bool(config.get('normalize_d304',False)))
     try:
         with connect(path) as db:
             if not db.execute("SELECT 1 FROM job WHERE id=? AND state='extracting' AND owner=? AND lease_until>?",(job_id,request['request_id'],time.time())).fetchone():
@@ -150,6 +151,11 @@ def extract_job(path, job_id, config, *, sender=None):
             return commit_response(path, request['request_id'], response)
     except Exception as error:
         with connect(path) as db:
+            audit=getattr(error,'extraction_audit',None)
+            if audit is not None:
+                existing=db.execute('SELECT result_json FROM job WHERE id=?',(job_id,)).fetchone()[0]
+                result=json.loads(existing or '{}');result['extraction_audit']=audit
+                db.execute('UPDATE job SET result_json=? WHERE id=?',(json.dumps(result),job_id))
             limited=isinstance(error,HTTPException) and error.status_code==429
             db.execute("UPDATE job SET state=?,error=?,owner=NULL,lease_until=NULL WHERE id=? AND state='extracting' AND owner=?", ('prepared' if limited else 'failed','budget_limit' if limited else 'model_call_failed',job_id, request['request_id']))
             db.execute("UPDATE model_request SET state='failed' WHERE id=? AND state='issued'", (request['request_id'],))

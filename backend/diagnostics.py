@@ -48,7 +48,7 @@ def save(path,request_id,error,values):
     size=len(raw) if isinstance(raw,bytes) else values.get('response_bytes')
     body={'id':uuid.uuid4().hex,'request_id':request_id,'at':datetime.now(timezone.utc).isoformat(),
           **diagnostic,'response_bytes':size,'completion_tokens':values.get('completion_tokens'),
-          'memory_count':values.get('memory_count'),'raw_kind':values.get('raw_kind','extraction'),
+          'extraction_audit':values.get('extraction_audit'),'memory_count':values.get('memory_count'),'raw_kind':values.get('raw_kind','extraction'),
           'raw':raw.decode('utf-8',errors='replace') if isinstance(raw,bytes) and len(raw)<=MAX_RAW else None}
     with LOCK:
         target=directory(path);target.mkdir(exist_ok=True)

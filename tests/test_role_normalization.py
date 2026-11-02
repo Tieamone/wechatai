@@ -101,11 +101,13 @@ def test_preview_preserves_quotes_escapes_content_and_does_not_write(client,tmp_
         assert db.execute('SELECT count(*) FROM usage_ledger').fetchone()[0]==0
 
 
-def test_system_role_does_not_get_mixed_role_exception(client):
+def test_system_role_is_dropped_only_when_enabled(client):
     path,_=setup(client)
     with connect(path) as db:db.execute("UPDATE message SET sender_role='system' WHERE id=2")
     request=issue_request(path,1)
-    with pytest.raises(HTTPException) as error:
-        commit_response(path,request['request_id'],json.dumps({'memories':[result(refs=['s1','s2'])]}),normalize_d304=True)
-    assert error.value.diagnostic['code']=='D304'
-    with connect(path) as db:assert db.execute('SELECT count(*) FROM memory').fetchone()[0]==0
+    raw=json.dumps({'memories':[result(refs=['s1','s2'])]})
+    with pytest.raises(HTTPException):commit_response(path,request['request_id'],raw)
+    output=commit_response(path,request['request_id'],raw,normalize_d304=True)
+    assert output['memory_ids']==[]
+    assert output['audit']['dropped_memories']==1
+    assert output['audit']['items'][0]['category']=='system_role_reference'
