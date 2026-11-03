@@ -1,0 +1,5 @@
+SCHEMA='''
+ALTER TABLE budget_policy ADD COLUMN batch_percent INTEGER NOT NULL DEFAULT 70 CHECK(batch_percent BETWEEN 1 AND 100);
+ALTER TABLE batch_run ADD COLUMN idle_only INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE batch_step ADD COLUMN reason TEXT;
+'''

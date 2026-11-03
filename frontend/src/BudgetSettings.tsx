@@ -12,6 +12,8 @@ export function BudgetSettings({api}:{api:API}){
     {form&&<>
       <label><input type="checkbox" checked={!!form.enabled} onChange={e=>change('enabled',e.target.checked)}/>启用滚动 24 小时硬预算</label>
       <label>24 小时 Token 上限<input aria-label="24 小时 Token 上限" type="number" min="4096" value={form.token_limit} onChange={e=>change('token_limit',Number(e.target.value))}/></label>
+      <label>批量最多占全局额度（%）<input aria-label="批量额度比例" type="number" min="1" max="100" value={form.batch_percent} onChange={e=>change('batch_percent',Number(e.target.value))}/></label>
+      <p>按所有批量运行在滚动 24 小时内的已用与在途预留合计限制 Token 和金额，单批限制同时生效。{!form.enabled&&'全局预算关闭，无法保证实时处理的额度余量。'}</p>
       <label>24 小时金额上限（元，留空只限制 Token）<input aria-label="24 小时金额上限" type="number" disabled={form.input_rate===null||form.output_rate===null||form.model!==data.current_model||form.base_url!==data.current_base_url} min="0.000001" step="0.01" value={form.amount_limit===null?'':form.amount_limit/1000000} onChange={e=>change('amount_limit',e.target.value===''?null:Math.round(Number(e.target.value)*1000000))}/></label>
       <h3>单价确认</h3><p>当前模型：{data.current_model||'未配置'}。单价按每百万 Token 的人民币金额填写；切换模型或接口后需要重新确认。按公开原价估算，未核对账单。</p>
       <button className="secondary" onClick={()=>{setForm({...form,model:data.current_model,base_url:data.current_base_url});setSaved(false)}}>将单价绑定当前模型</button>
