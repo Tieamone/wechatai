@@ -37,7 +37,7 @@ export function MemoryLibrary({api,run,refresh,busy,memories}:Props){
       <small>{m.confirmed?'✓ 已确认':m.origin==='model'?'AI 提炼 · 待核对':m.origin==='synthetic'?'合成返回 · 待核对':'人工整理 · 待核对'} · {labels[m.subject]} · {labels[m.temporal_kind]}</small>
       <h3>{m.summary}</h3>
       <button disabled={busy} className={m.confirmed?'secondary':''} onClick={()=>run(async()=>{await api(`memories/${m.id}/review/${m.confirmed?'reopen':'confirm'}`,'POST',{expected_version:m.version});await changed()})}>{m.confirmed?'移回待核对':'✓ 确认正确'}</button>
-      <button disabled={busy||m.low_value} className="secondary" onClick={()=>run(async()=>{await api(`memories/${m.id}/review/low_value`,'POST',{expected_version:m.version});await changed()})}>{m.low_value?'已标记：准确但不值得保留':'准确但不值得保留'}</button>
+      <button disabled={busy} className="secondary" onClick={()=>run(async()=>{await api(`memories/${m.id}/review/${m.low_value?'clear_low_value':'low_value'}`,'POST',{expected_version:m.version});await changed()})}>{m.low_value?'取消不值得保留':'准确但不值得保留'}</button>
       <small>价值反馈独立于准确性确认，不停用记忆，仍参与检索。</small>
       {m.mixed_role_evidence&&<p role="status">混合角色证据 · {m.confirmed?'已人工核对':'待人工核对'}。全部引用完整保留，请结合双方原文判断摘要。</p>}
       <details open={m.mixed_role_evidence?true:undefined}><summary>查看原文证据与更正（{m.evidence.length} 条证据）</summary>

@@ -60,6 +60,22 @@ def verify_window(path,w):
         return payload,refs,job['initialization_id']
 
 
+def preflight_budget(db,config,system,payload,limit):
+    """Read-only estimate of the next call; invoke still reserves atomically later."""
+    settings=budgets.policy(db)
+    estimate=len((system+json.dumps(payload,ensure_ascii=False)).encode('utf-8'))+128
+    priced=settings['model']==config.get('model') and settings['base_url']==config.get('base_url') and settings['input_rate'] is not None and settings['output_rate'] is not None
+    a=max(settings['input_rate'],settings['cached_rate'] or 0) if priced else None
+    b=max(settings['output_rate'],settings['reasoning_rate'] or 0) if priced else None
+    cost=budgets.cost(estimate,4096,a,b) if priced else None
+    if not settings['enabled']:raise ValueError('请先明确开启全局预算，实验不修改预算')
+    budgets.check_limit(settings,budgets.totals(db),estimate,4096,cost)
+    share={**settings,'token_limit':settings['token_limit']*settings['batch_percent']//100,
+           'amount_limit':settings['amount_limit']*settings['batch_percent']//100 if settings['amount_limit'] is not None else None}
+    budgets.check_limit(share,budgets.totals(db,batch_only=True),estimate,4096,cost)
+    if estimate+4096>limit:raise ValueError('单轮 Token 上限不足以预留首个窗口，零调用退出')
+
+
 def execute(root,plan,approved,output,*,sender=None):
     """Future authorized run: only usage/batch accounting is persisted, never memories."""
     if approved!=plan['manifest_sha256'] or prepare(root)!=plan:raise ValueError('清单不匹配，请重新生成并审阅')
@@ -70,18 +86,26 @@ def execute(root,plan,approved,output,*,sender=None):
     if not config.get('enabled') or not config.get('key_encrypted'):raise ValueError('模型未启用')
     with ExitStack() as stack:
         for name in ('workbench','collector','bot'):stack.enter_context(worker_lock(path.parent/('runtime' if name=='workbench' else name),name))
+        payload,refs,initialization=verify_window(path,plan['windows'][0])
+        system=SYSTEM_PROMPT+'\nJSON schema:\n'+json.dumps(Extraction.model_json_schema())
         with connect(path) as db:
+            db.execute('BEGIN IMMEDIATE')
             if db.execute('PRAGMA user_version').fetchone()[0]!=SCHEMA_VERSION:raise ValueError('需先按备份流程升级；实验不自动迁移')
-            if not budgets.policy(db)['enabled']:raise ValueError('请先明确开启全局预算，实验不修改预算')
-            if db.execute("SELECT 1 FROM batch_run WHERE state='active'").fetchone():raise ValueError('仍有启用中的批量运行')
-        initialization=verify_window(path,plan['windows'][0])[2]
-        # Exclusive receipt creation prevents accidental paid retries after interruption.
-        output.mkdir(parents=True,exist_ok=True)
-        receipt=output/'receipt.json'
-        with receipt.open('x',encoding='utf-8') as file:json.dump({'state':'starting','manifest_sha256':approved},file)
-        with connect(path) as db:
-            run=db.execute('''INSERT INTO batch_run(initialization_id,request_key,request_hash,max_windows,token_limit,model,base_url,created_at)
-                VALUES(?,?,?,12,40000,?,?,?)''',(initialization,'thinking-'+approved,approved,MODEL,config['base_url'],time.time())).lastrowid
+            prior=db.execute('SELECT * FROM batch_run WHERE request_key=?',('thinking-'+approved,)).fetchone()
+            if prior and db.execute('SELECT 1 FROM usage_ledger WHERE batch_id=? LIMIT 1',(prior['id'],)).fetchone():
+                raise ValueError('本清单已有调用账本记录，禁止同清单重试；不能凭 receipt 推断零花费')
+            prior_id=prior['id'] if prior else -1
+            if db.execute("SELECT 1 FROM batch_run WHERE id!=? AND (state='active' OR (initialization_id=? AND state='paused'))",(prior_id,initialization)).fetchone():raise ValueError('仍有占用中的批量运行')
+            try:preflight_budget(db,config,system,payload,plan['token_limit'])
+            except HTTPException as error:raise ValueError('预算预检未通过，零调用退出；全局、批量比例或单轮额度不足：'+str(error.detail)) from None
+            # Files alone never prohibit a retry. Only this manifest's ledger does.
+            output.mkdir(parents=True,exist_ok=True);receipt=output/'receipt.json'
+            receipt.write_text(json.dumps({'state':'starting','manifest_sha256':approved}),encoding='utf-8')
+            if prior:
+                run=prior['id'];db.execute("UPDATE batch_run SET state='active',reason=NULL WHERE id=?",(run,))
+            else:
+                run=db.execute('''INSERT INTO batch_run(initialization_id,request_key,request_hash,max_windows,token_limit,model,base_url,created_at)
+                    VALUES(?,?,?,12,40000,?,?,?)''',(initialization,'thinking-'+approved,approved,MODEL,config['base_url'],time.time())).lastrowid
         report={'manifest_sha256':approved,'model':MODEL,'max_calls':12,'token_limit':40000,'state':'running','results':[]}
         period=budgets.idle();token=budgets.BATCH.set(run)
         try:

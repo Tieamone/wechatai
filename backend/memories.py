@@ -138,10 +138,14 @@ def memory_card(db, row):
         card['evidence'].append(item)
     card['mixed_role_evidence']=card['origin'] in ('model','synthetic') and card['assertion']=='direct' and card['subject'] in ('self','peer') and any(e['sender_role']!=card['subject'] for e in card['evidence'])
     snapshot=[{k:e[k] for k in ('message_id','message_revision','span_start','span_end')} for e in card['evidence']]
-    card['low_value']=any(json.loads(f['evidence_json'])==snapshot for f in db.execute(
-        "SELECT evidence_json FROM feedback WHERE memory_id=? AND memory_version=? AND action='low_value' AND valid=1",
-        (row['id'],row['version']))) and all(e['current_revision']==e['message_revision'] for e in card['evidence'])
+    card['low_value']=value_feedback(db,row['id'],row['version'],snapshot)=='low_value' and all(e['current_revision']==e['message_revision'] for e in card['evidence'])
     return card
+
+
+def value_feedback(db,memory_id,version,evidence):
+    for feedback in db.execute("SELECT action,evidence_json FROM feedback WHERE memory_id=? AND memory_version=? AND action IN ('low_value','clear_low_value') AND valid=1 ORDER BY id DESC",(memory_id,version)):
+        if json.loads(feedback['evidence_json'])==evidence:return feedback['action']
+    return None
 
 
 def record_feedback(db,memory_id,action):
@@ -186,7 +190,7 @@ def router(path: Path):
             return {'pending':total-confirmed,'confirmed':confirmed}
 
     @routes.post('/{memory_id}/review/{action}')
-    def review_memory(memory_id:int, action:Literal['confirm','reopen','low_value'], body:Review):
+    def review_memory(memory_id:int, action:Literal['confirm','reopen','low_value','clear_low_value'], body:Review):
         with connect(path) as db:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT * FROM memory WHERE id=?',(memory_id,)).fetchone()

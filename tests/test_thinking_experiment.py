@@ -60,5 +60,49 @@ def test_fake_sender_full_experiment_does_not_commit_memories(client,tmp_path):
     assert sum('enable_thinking' in b for b in calls)==6
     assert report['disk_model_config_unchanged']
     with connect(path) as db:assert {t:db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in before}==before
-    with pytest.raises(FileExistsError):execute(root,plan,plan['manifest_sha256'],root/'private/synthetic-run',sender=sender)
+    with pytest.raises(ValueError,match='调用账本记录'):execute(root,plan,plan['manifest_sha256'],root/'private/synthetic-run',sender=sender)
     assert len(calls)==12
+
+
+def test_preflight_budget_leaves_no_receipt_or_run_and_allows_retry(client,tmp_path):
+    from unittest.mock import Mock
+    root=fixture_root(client,tmp_path);path=root/'data/memory.sqlite3';plan=prepare(root);folder=root/'private/zero-cost'
+    with connect(path) as db:db.execute('UPDATE budget_policy SET token_limit=4096')
+    sender=Mock()
+    with pytest.raises(ValueError,match='预算预检未通过'):execute(root,plan,plan['manifest_sha256'],folder,sender=sender)
+    sender.assert_not_called();assert not (folder/'receipt.json').exists()
+    with connect(path) as db:
+        assert db.execute('SELECT count(*) FROM batch_run').fetchone()[0]==0
+        assert db.execute('SELECT count(*) FROM usage_ledger').fetchone()[0]==0
+        db.execute('UPDATE budget_policy SET token_limit=1000000')
+    def fake(*args):
+        usage.mark_sent();usage.settle({'prompt_tokens':10,'completion_tokens':10,'total_tokens':20})
+        return '{"memories":[]}'
+    assert execute(root,plan,plan['manifest_sha256'],folder,sender=fake)['state']=='completed'
+
+
+def test_preflight_includes_rolling_batch_share(client,tmp_path):
+    import time
+    from unittest.mock import Mock
+    root=fixture_root(client,tmp_path);path=root/'data/memory.sqlite3';plan=prepare(root);folder=root/'private/share-blocked'
+    with connect(path) as db:
+        db.execute('UPDATE budget_policy SET token_limit=100000')
+        run=db.execute("INSERT INTO batch_run(initialization_id,request_key,request_hash,state,max_windows,token_limit,model,base_url,created_at) VALUES(1,'older','older','completed',1,100000,?,'https://synthetic.invalid',?)",(MODEL,time.time())).lastrowid
+        db.execute("INSERT INTO usage_ledger(kind,model,at,state,reserved_input,reserved_output,batch_id) VALUES('manual',?,?,'unknown',70000,0,?)",(MODEL,time.time(),run))
+    sender=Mock()
+    with pytest.raises(ValueError,match='预算预检未通过'):execute(root,plan,plan['manifest_sha256'],folder,sender=sender)
+    sender.assert_not_called();assert not folder.exists()
+    with connect(path) as db:assert db.execute('SELECT count(*) FROM batch_run').fetchone()[0]==1
+
+
+def test_receipt_without_ledger_does_not_block_retry(client,tmp_path,monkeypatch):
+    from backend import budgets
+    root=fixture_root(client,tmp_path);plan=prepare(root);folder=root/'private/no-call'
+    periods=iter([False,True]);monkeypatch.setattr(budgets,'idle',lambda *a:next(periods))
+    def fake(*args):
+        usage.mark_sent();usage.settle({'prompt_tokens':10,'completion_tokens':10,'total_tokens':20})
+        return '{"memories":[]}'
+    assert execute(root,plan,plan['manifest_sha256'],folder,sender=fake)['state']=='stopped_period_change'
+    assert (folder/'receipt.json').exists()
+    monkeypatch.setattr(budgets,'idle',lambda *a:False)
+    assert execute(root,plan,plan['manifest_sha256'],folder,sender=fake)['state']=='completed'
