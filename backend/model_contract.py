@@ -78,8 +78,9 @@ def current_window(db, job):
             'time_context': 'exact_dates_omitted'}, refs
 
 
-def issue_request(path, job_id, *, claim=False, provider='synthetic',normalize_d304=None):
+def issue_request(path, job_id, *, claim=False, provider='synthetic',normalize_d304=None,thinking_mode='default'):
     """Freeze evidence and optionally claim a window before a bounded model call."""
+    if thinking_mode not in {'default','off'}:raise HTTPException(422,'未知思考模式')
     with connect(path) as db:
         db.execute('BEGIN IMMEDIATE')
         job = db.execute("SELECT j.* FROM job j JOIN initialization i ON i.id=j.initialization_id WHERE j.id=? AND i.state='active'", (job_id,)).fetchone()
@@ -88,11 +89,12 @@ def issue_request(path, job_id, *, claim=False, provider='synthetic',normalize_d
         payload, refs = current_window(db, job)
         request_id = secrets.token_hex(16)
         if claim and normalize_d304 is not None:
-            db.execute("UPDATE job SET result_json=json_remove(json_set(COALESCE(result_json,'{}'),'$.extraction_policy',json(?)),'$.extraction_audit') WHERE id=?",(json.dumps({'normalize_d304':normalize_d304,'version':3}),job_id))
+            db.execute("UPDATE job SET result_json=json_remove(json_set(COALESCE(result_json,'{}'),'$.extraction_policy',json(?)),'$.extraction_audit','$.thinking_observation') WHERE id=?",(json.dumps({'normalize_d304':normalize_d304,'version':3,'thinking_mode':thinking_mode}),job_id))
         if claim:
             db.execute("UPDATE job SET state='extracting',owner=?,lease_until=? WHERE id=?", (request_id, time.time()+60, job_id))
         stored = {'payload': payload, 'refs': refs}
-        if normalize_d304 is not None:stored['policy']={'normalize_d304':normalize_d304,'version':3}
+        if normalize_d304 is not None:stored['policy']={'normalize_d304':normalize_d304,'version':3,'thinking_mode':thinking_mode}
+        elif thinking_mode!='default':stored['policy']={'thinking_mode':thinking_mode}
         db.execute("UPDATE model_request SET state='superseded' WHERE job_id=? AND state='issued'", (job_id,))
         db.execute('INSERT INTO model_request(id,job_id,input_hash,mapping_hash,prompt_version,provider,payload_json) VALUES(?,?,?,?,?,?,?)',
                    (request_id, job_id, digest(stored), mapping_hash(db), PROMPT_VERSION, provider, json.dumps(stored, ensure_ascii=False)))
@@ -154,7 +156,7 @@ def _commit_response(path, request_id, raw_response, *, replay=False, normalize_
         stored = json.loads(request['payload_json'])
         payload, refs = current_window(db, job)
         frozen=stored.get('policy',{})
-        if not replay and frozen and normalize_d304 is not None and normalize_d304!=frozen['normalize_d304']:
+        if not replay and frozen and normalize_d304 is not None and normalize_d304!=frozen.get('normalize_d304',False):
             raise diagnostics.failure(409,'请求规整策略已冻结','D209')
         if normalize_d304 is None:normalize_d304=frozen.get('normalize_d304',False)
         checked={'payload':payload,'refs':refs}
