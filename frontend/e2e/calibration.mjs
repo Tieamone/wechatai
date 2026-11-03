@@ -22,6 +22,7 @@ try{
  const progress=await download;const saved=JSON.parse(await readFile(await progress.path(),'utf8'));
  assert.equal(saved.labels[0].conclusion,'long');assert.equal(saved.labels[0].evidence_support,'supported');
  assert.equal(saved.labels[0].health_finance,true);assert.ok(!JSON.stringify(saved).includes('合成原文'));
+ assert.equal(saved.format,2);assert.equal(saved.label_semantics,'accuracy_from_conclusion_v2');
  assert.ok(saved.labels.every(r=>!('summary' in r)&&!('evidence' in r)));
  await page.reload();await expect(page.locator('button[aria-pressed=true]')).toHaveCount(0);
  await page.locator('#import').setInputFiles({name:'progress.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(saved))});
@@ -34,6 +35,14 @@ try{
  await expect(page.getByRole('button',{name:'长期有价值',exact:true})).toHaveAttribute('aria-pressed','true');
  const final=page.waitForEvent('download');await page.getByRole('button',{name:'导出已标注结论'}).click();
  assert.equal(JSON.parse(await readFile(await (await final).path(),'utf8')).labels.length,1);
+ await page.locator('#import').setInputFiles({name:'old.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({...saved,format:1}))});
+ await expect(page.getByRole('status')).toContainText('语义已更新');
+ await page.keyboard.press('ArrowRight');await expect(page.locator('#position')).toContainText('第 2 / 3');
+ await page.keyboard.press('2');await expect(page.locator('#position')).toContainText('第 3 / 3');
+ await page.keyboard.press('ArrowLeft');await expect(page.getByRole('button',{name:'短期有价值',exact:true})).toHaveAttribute('aria-pressed','true');
+ await page.getByText('可选独立维度（默认空白）',{exact:true}).click();
+ await page.getByLabel('证据支持',{exact:true}).focus();await page.keyboard.press('1');
+ await expect(page.locator('#position')).toContainText('第 2 / 3');
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
  console.log('PASS: synthetic calibration blank defaults, disabled storage, progress export/import, stale rejection, no raw export, XSS and narrow layout');
