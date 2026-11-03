@@ -307,11 +307,15 @@ PRAGMA user_version=19; COMMIT;''')
         if version == 20:
             from .budget_schema import SCHEMA as budgets
             db.executescript('BEGIN IMMEDIATE;'+budgets+'PRAGMA user_version=21; COMMIT;')
+            version=21
+        if version == 21:
+            from .usage_details_schema import SCHEMA as usage_details
+            db.executescript('BEGIN IMMEDIATE;'+usage_details+'PRAGMA user_version=22; COMMIT;')
         if db.execute('SELECT normalization_version FROM mapping_policy').fetchone()[0] != 1:
             raise RuntimeError('Unsupported mapping normalization version')
 
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 
 def initialize(path: Path):

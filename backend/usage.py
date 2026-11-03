@@ -64,4 +64,30 @@ def settle(usage):
     with connect(context[0]) as db:
         row=db.execute('SELECT input_rate,output_rate FROM usage_ledger WHERE id=?',(context[1],)).fetchone()
         amount=budgets.cost(a,b,row['input_rate'],row['output_rate']) if row['input_rate'] is not None else None
-        db.execute("UPDATE usage_ledger SET state='settled',input_tokens=?,output_tokens=?,actual_cost=?,lease_until=NULL WHERE id=?",(a,b,amount,context[1]))
+        details=token_details(usage)
+        db.execute("UPDATE usage_ledger SET state='settled',input_tokens=?,output_tokens=?,actual_cost=?,reasoning_tokens=?,cached_input_tokens=?,reported_text_tokens=?,lease_until=NULL WHERE id=?",
+                   (a,b,amount,details['reasoning_tokens'],details['cached_input_tokens'],details['reported_text_tokens'],context[1]))
+
+
+def token_details(usage):
+    """Optional provider counters, never extra tokens or inferred visible output."""
+    result={}
+    for target,parent,key,bound in (
+        ('reasoning_tokens','completion_tokens_details','reasoning_tokens','completion_tokens'),
+        ('cached_input_tokens','prompt_tokens_details','cached_tokens','prompt_tokens'),
+        ('reported_text_tokens','completion_tokens_details','text_tokens','completion_tokens')):
+        group=usage.get(parent) if isinstance(usage,dict) else None
+        value=group.get(key) if isinstance(group,dict) else None
+        maximum=usage.get(bound) if isinstance(usage,dict) else None
+        result[target]=value if type(value) is int and type(maximum) is int and 0<=value<=maximum else None
+    return result
+
+
+def detail_totals(db,since):
+    row=db.execute('''SELECT count(*) calls,count(reasoning_tokens) reasoning_known,
+        sum(reasoning_tokens) reasoning_tokens,
+        sum(CASE WHEN reasoning_tokens IS NOT NULL THEN output_tokens ELSE 0 END) covered_output_tokens,
+        count(cached_input_tokens) cached_known,sum(cached_input_tokens) cached_input_tokens,
+        count(reported_text_tokens) text_known,sum(reported_text_tokens) reported_text_tokens
+        FROM usage_ledger WHERE at>? AND state!='released' ''',(since,)).fetchone()
+    return dict(row)

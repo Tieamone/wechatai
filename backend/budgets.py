@@ -96,10 +96,11 @@ def router(path):
     @routes.get('')
     def get():
         from .ai_settings import load
+        from .usage import detail_totals
         config=load(path.parent)
         with connect(path) as db:
             settings=policy(db)
-            return {'settings':settings,'rolling':totals(db),
+            return {'settings':settings,'rolling':totals(db),'token_details':detail_totals(db,time.time()-86400),
                     'current_model':config.get('model',''),'current_base_url':config.get('base_url',''),
                     'price_matches':settings['model']==config.get('model') and settings['base_url']==config.get('base_url') and settings['input_rate'] is not None,
                     'states':{r[0]:r[1] for r in db.execute('SELECT state,count(*) FROM usage_ledger WHERE at>? GROUP BY state',(time.time()-86400,))}}

@@ -37,7 +37,7 @@ def test_upgrade_and_restore(tmp_path):
     shutil.copy2(files[0],restored)
     initialize(restored)
     with connect(restored) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==21
+        assert db.execute('PRAGMA user_version').fetchone()[0]==22
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
         assert db.execute('SELECT count(*) FROM conversation').fetchone()[0]==1
 
