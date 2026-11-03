@@ -29,7 +29,8 @@ def test_rejection_metadata_and_readonly_replay(client,raw,code):
     artifact=diagnostics.files(path)[0]
     with connect(path) as db:before=db.execute('SELECT count(*) FROM memory').fetchone()[0]
     replay=revalidate(path,artifact)
-    assert not replay['valid'] and replay['code']==code
+    # Malformed JSON cannot safely exclude reasoning text and is metadata-only.
+    assert not replay['valid'] and replay['code']==('NO_RAW' if code=='D102' else code)
     with connect(path) as db:assert db.execute('SELECT count(*) FROM memory').fetchone()[0]==before
     assert len(diagnostics.files(path))==1
     assert client.delete('/api/model-diagnostics').status_code==200

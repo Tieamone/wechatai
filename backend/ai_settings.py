@@ -102,6 +102,7 @@ def complete(config, system, data):
                                      'messages':[{'role':'system','content':system},
                                                  {'role':'user','content':json.dumps(data, ensure_ascii=False)}]}) as response:
                 mark_sent()
+                diagnostics.observe(http_status=response.status_code,content_type=response.headers.get('content-type','')[:120])
                 if response.status_code != 200:
                     raise HTTPException(502, f'模型接口返回 HTTP {response.status_code}，请检查地址、密钥、模型和余额')
                 raw = bytearray()
@@ -111,7 +112,14 @@ def complete(config, system, data):
                     if len(raw) > 256000:
                         raise diagnostics.failure(502,'模型返回过大','D103')
                 diagnostics.observe(raw=retained_response(raw),raw_kind='http_json')
-                return parse_response(raw,settle_usage=True)
+                try:return parse_response(raw,settle_usage=True)
+                except HTTPException as error:
+                    code=diagnostics.details(error)['code']
+                    if code in {'D102','D106'}:
+                        safe=retained_response(raw)
+                        diagnostics.observe(raw=None,raw_prefix=safe[:2048].decode('utf-8',errors='ignore') if safe else None,
+                                            prefix_omitted_reason=None if safe else 'cannot_exclude_reasoning_text')
+                    raise
     except httpx.TimeoutException:
         raise HTTPException(504, '模型请求超时，未自动重试；可能已产生费用') from None
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
