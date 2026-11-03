@@ -53,9 +53,12 @@ def build(root,output):
                     valid=bool(f['valid'] and f['memory_version']==memory['version'] and fresh and sorted(snapshot,key=lambda e:json.dumps(e,sort_keys=True))==sorted(evidence,key=lambda e:json.dumps(e,sort_keys=True)))
                     actions.append({'id':f['id'],'memory_version':f['memory_version'],'action':f['action'],'valid':valid})
                 legacy=db.execute('SELECT count(*) FROM correction WHERE memory_id=?',(mid,)).fetchone()[0]
+                value='low_value' if any(f['valid'] and f['action']=='low_value' for f in actions) else None
+                report['value_labels']+=int(value is not None)
                 window['memories'].append({'memory_id':mid,'memory_version':memory['version'],'status':memory['status'],'confirmed_current':confirmed,
-                    'evidence_fresh':bool(fresh),'evidence':evidence,'feedback':actions,'unversioned_corrections':legacy,'value_label':None})
+                    'evidence_fresh':bool(fresh),'evidence':evidence,'feedback':actions,'unversioned_corrections':legacy,'value_label':value})
                 label='当前版本已确认准确性（不等于有价值）' if confirmed else '无当前版本确认，未标价值'
+                if value:label+='；用户已标记：准确但不值得保留'
                 if legacy:label+='；有无版本绑定的旧更正记录，不能直接作金标准'
                 memory_html.append(f"<li>记忆 #{mid} v{memory['version']}：{html.escape(memory['summary'])}<br><small>{label}；引用 "+', '.join('#'+str(e['message_id'])+' v'+str(e['message_revision']) for e in evidence)+'</small></li>')
             report['windows'].append(window)
