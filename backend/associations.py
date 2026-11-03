@@ -71,7 +71,7 @@ def prefetch_evidence(db, memory_ids, *, with_text=False):
         yield memory_id,list(group)
 
 
-def rank_candidates(db, trigger_id):
+def rank_candidates(db, trigger_id, *, confirmed_only=False):
     """Read-only legacy top-10 recall; scores are lexical overlap, not relevance."""
     trigger=db.execute('SELECT * FROM message WHERE id=?',(trigger_id,)).fetchone()
     if trigger['sender_role']!='peer' or trigger['type']!='text' or not trigger['event_utc']:
@@ -80,8 +80,10 @@ def rank_candidates(db, trigger_id):
     query=terms(' '.join(r['text'] for r in recent if r['type']=='text'))
     prepared=prepare_mentions(db,recent[0]['event_utc'])
     current_people={r['person_token'] for r in mention_candidates(db,[(r['text'],r['event_utc']) for r in recent if r['type']=='text'],recent[0]['event_utc'],prepared=prepared)}
+    from .eligibility import confirmed_sql
+    clause=confirmed_sql() if confirmed_only else "m.status='active'"
     scored=[(len(query & memory_terms(m['id'],m['version'],m['summary'])),m)
-            for m in db.execute("SELECT id,version,summary FROM memory WHERE status='active'").fetchall()]
+            for m in db.execute('SELECT m.id,m.version,m.summary FROM memory m WHERE '+clause).fetchall()]
     # Person overlap can give a zero-lexical-score memory its first point.
     selected=[m['id'] for score,m in scored if score or current_people]
     by_id={memory['id']:(score,memory) for score,memory in scored}
@@ -100,7 +102,9 @@ def rank_candidates(db, trigger_id):
 
 
 def enqueue_candidates(db, trigger_id):
-    for candidate in rank_candidates(db, trigger_id):
+    from .eligibility import confirmed
+    for candidate in rank_candidates(db, trigger_id,confirmed_only=True):
+        if not confirmed(db,candidate['memory_id']):continue
         db.execute('INSERT OR IGNORE INTO association(trigger_id,trigger_revision,memory_id,memory_version) VALUES(?,?,?,?)',
                    (trigger_id,candidate['trigger_revision'],candidate['memory_id'],candidate['memory_version']))
 
@@ -144,14 +148,15 @@ def context(db, candidate):
 
 
 def judge_next(path, synthetic_judge, *, real=False, trigger_id=None):
+    from .eligibility import confirmed_sql
     owner=secrets.token_hex(16)
     with connect(path) as db:
         db.execute('BEGIN IMMEDIATE')
         db.execute("UPDATE association SET state='failed',error='lease_expired',owner=NULL WHERE state='judging' AND lease_until<=?",(time.time(),))
         if real:
-            row=db.execute("SELECT a.* FROM association a JOIN auto_message m ON m.trigger_id=a.trigger_id WHERE a.state='pending' AND m.state='processing' AND a.trigger_id=? AND (SELECT enabled FROM auto_control WHERE id=1)=1 ORDER BY a.id LIMIT 1",(trigger_id,)).fetchone()
+            row=db.execute("SELECT a.* FROM association a JOIN auto_message queue ON queue.trigger_id=a.trigger_id JOIN memory m ON m.id=a.memory_id WHERE a.state='pending' AND queue.state='processing' AND a.trigger_id=? AND (SELECT enabled FROM auto_control WHERE id=1)=1 AND "+confirmed_sql()+" ORDER BY a.id LIMIT 1",(trigger_id,)).fetchone()
         else:
-            row=db.execute("SELECT * FROM association WHERE state='pending' ORDER BY id LIMIT 1").fetchone()
+            row=db.execute("SELECT a.* FROM association a JOIN memory m ON m.id=a.memory_id WHERE a.state='pending' AND "+confirmed_sql()+" ORDER BY a.id LIMIT 1").fetchone()
         if row is None:
             return {'processed':False}
         try:
@@ -215,10 +220,12 @@ def router(path):
 
     @routes.get('')
     def listing():
+        from .eligibility import confirmed
         with connect(path) as db:
             reconcile_confirmed(db)
             cards=[]
             for row in db.execute("SELECT * FROM association WHERE state IN ('confirmed_synthetic','confirmed_model') ORDER BY id DESC LIMIT 100").fetchall():
+                if not confirmed(db,row['memory_id']):continue
                 try:
                     if digest([context(db,row),mapping_hash(db)])!=row['context_hash']:
                         continue

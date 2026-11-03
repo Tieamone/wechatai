@@ -25,6 +25,8 @@ def test_background_extraction_demo(tmp_path):
         assert client.get('/api/initializations').json()[0]['extraction_complete'] is False
         assert client.get('/api/reminders').json()==[]
         live=json.loads((ROOT/'samples'/'live.json').read_text(encoding='utf-8'))
+        for memory in memories:
+            client.post(f"/api/memories/{memory['id']}/review/confirm",json={'expected_version':memory['version']}).raise_for_status()
         client.post('/api/import',json=live).raise_for_status()
         deadline=time.monotonic()+5
         while time.monotonic()<deadline:

@@ -6,12 +6,13 @@ import httpx
 
 from .store import connect
 from .associations import reconcile_confirmed
+from .eligibility import confirmed_sql
 
 TITLE = '聊天记忆助手：有一条待查看提醒'
 BODY = '请在电脑工作台查看详情。本通知不包含聊天正文。'
 TEST_TITLE = '聊天记忆助手：合成通知测试'
 TEST_BODY = '这是一条测试消息，不是真实聊天提醒。请检查手机通知栏。'
-WATCH_VALID = "r.status='active' AND w.enabled=1 AND w.revision=r.watch_revision AND (w.source_memory_id IS NULL OR m.status='active')"
+WATCH_VALID = "r.status='active' AND w.enabled=1 AND w.revision=r.watch_revision AND (w.source_memory_id IS NULL OR ("+confirmed_sql()+"))"
 
 
 def pending(path, channel, *, synthetic=False):
@@ -27,12 +28,12 @@ def pending(path, channel, *, synthetic=False):
 def pending_associations(path, channel):
     with connect(path) as db:
         reconcile_confirmed(db)
-        return [r[0] for r in db.execute("""SELECT a.id FROM association a
+        return [r[0] for r in db.execute("""SELECT a.id FROM association a JOIN memory m ON m.id=a.memory_id
             LEFT JOIN association_notification n ON n.association_id=a.id AND n.channel=?
             WHERE a.state='confirmed_model' AND n.association_id IS NULL
             AND (SELECT enabled FROM auto_control WHERE id=1)=1
             AND NOT EXISTS(SELECT 1 FROM notification_record x WHERE x.kind='ordinary' AND x.item_id=a.id AND x.channel=? AND x.synthetic=0)
-            ORDER BY a.id""",(channel,channel))]
+            AND """+confirmed_sql()+" ORDER BY a.id",(channel,channel))]
 
 
 def _deliver(path, kind, item_id, channel, sender, *, synthetic=False, retry_rejected=False):
@@ -41,7 +42,7 @@ def _deliver(path, kind, item_id, channel, sender, *, synthetic=False, retry_rej
         db.execute('BEGIN IMMEDIATE')
         if kind=='ordinary':
             reconcile_confirmed(db)
-            valid=db.execute("SELECT 1 FROM association WHERE id=? AND state='confirmed_model' AND (SELECT enabled FROM auto_control WHERE id=1)=1",(item_id,)).fetchone()
+            valid=db.execute("SELECT 1 FROM association a JOIN memory m ON m.id=a.memory_id WHERE a.id=? AND a.state='confirmed_model' AND (SELECT enabled FROM auto_control WHERE id=1)=1 AND "+confirmed_sql(),(item_id,)).fetchone()
             prior=db.execute('SELECT state FROM association_notification WHERE association_id=? AND channel=?',(item_id,channel)).fetchone()
         else:
             valid=db.execute(f"""SELECT 1 FROM reminder r JOIN watch_item w ON w.id=r.watch_id

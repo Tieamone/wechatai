@@ -14,6 +14,7 @@ from test_ai_settings import CONFIG
 def setup(client, limit=200):
     client.post('/api/import',json=batch())
     client.post('/api/memories',json=draft())
+    client.post('/api/memories/1/review/confirm',json={'expected_version':1}).raise_for_status()
     client.put('/api/ai/settings',json=CONFIG)
     assert client.put('/api/automatic',json={'enabled':True,'daily_limit':limit}).status_code==200
     body=batch('今天想喝咖啡',source_id='2',mode='live')

@@ -104,6 +104,8 @@ try {
   await expect(page.getByRole('heading',{name:'晚上不喝咖啡，避免睡不着'})).toBeVisible();
   await page.getByRole('button',{name:'移回待核对',exact:true}).click();
   await library.getByRole('button',{name:/^待核对（/}).click();
+  await page.getByRole('button',{name:'✓ 确认正确',exact:true}).click();
+  await library.getByRole('button',{name:/^已确认（/}).click();
   await page.getByText('将记忆设为特别关注',{exact:true}).click();
   await page.getByLabel('关注已有记忆').selectOption({label:'晚上不喝咖啡，避免睡不着'});
   await page.getByLabel('记忆关注关键词').fill('咖啡');
@@ -123,6 +125,7 @@ try {
   await page.getByRole('button',{name:'更正内容',exact:true}).click();
   await page.getByLabel('更正后的记忆').fill('对方晚上不喝咖啡，怕睡不着');
   await page.getByRole('button',{name:'保存更正',exact:true}).click();
+  await library.getByRole('button',{name:/^待核对（/}).click();
   await expect(page.getByRole('heading',{name:'对方晚上不喝咖啡，怕睡不着',exact:true})).toBeVisible();
   await go('reminders/list');
   await expect(reminders).toContainText('暂无提醒');
