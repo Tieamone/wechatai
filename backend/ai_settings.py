@@ -130,6 +130,8 @@ def complete(config, system, data):
                     code=diagnostics.details(error)['code']
                     if code in {'D102','D106'}:
                         safe=retained_response(raw)
+                        if code=='D102' and response.headers.get('content-type','').split(';',1)[0].strip().lower().startswith('text/'):
+                            safe=bytes(raw[:2048])
                         diagnostics.observe(raw=None,raw_prefix=safe[:2048].decode('utf-8',errors='ignore') if safe else None,
                                             prefix_omitted_reason=None if safe else 'cannot_exclude_reasoning_text')
                     raise

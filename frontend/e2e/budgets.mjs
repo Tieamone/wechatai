@@ -42,8 +42,11 @@ try{
   await go('memory/library');
   await page.getByText(/记忆库 · 待核对/).click();
   await page.getByRole('button',{name:'准确但不值得保留',exact:true}).click();
-  await expect(page.getByRole('button',{name:'已标记：准确但不值得保留'})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'取消不值得保留'})).toBeEnabled();
   const card=(await api('memories'))[0];assert.equal(card.low_value,true);assert.equal(card.confirmed,false);assert.equal(card.status,'active');
+  await page.getByRole('button',{name:'取消不值得保留'}).click();
+  await expect(page.getByRole('button',{name:'准确但不值得保留',exact:true})).toBeVisible();
+  assert.equal((await api('memories'))[0].low_value,false);
   await go('tasks/history');
   await expect(page.getByLabel('批量历史范围').locator('option')).toHaveCount(2,{timeout:10000});
   await page.getByLabel('批量历史范围').selectOption(String(init.id));

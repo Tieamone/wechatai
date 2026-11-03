@@ -34,3 +34,18 @@ def test_other_codes_do_not_keep_prefix(tmp_path):
     path=tmp_path/'memory.sqlite3'
     diagnostics.save(path,'synthetic',diagnostics.failure(422,'synthetic','D304'),{'raw':b'visible','raw_prefix':'should not save'})
     assert 'raw_prefix' not in json.loads(diagnostics.files(path)[0].read_text())
+
+
+@pytest.mark.parametrize('content_type,keep',[('text/plain; charset=utf-8',True),('text/html',True),('application/json',False)])
+def test_d102_text_prefix_and_json_omission(tmp_path,monkeypatch,content_type,keep):
+    raw=('网关响应'*1000).encode('utf-8')
+    monkeypatch.setattr(ai_settings,'protect',lambda *a,**k:b'synthetic')
+    transport=httpx.MockTransport(lambda request:httpx.Response(200,content=raw,headers={'content-type':content_type}))
+    factory=httpx.Client;monkeypatch.setattr(ai_settings.httpx,'Client',lambda **kw:factory(transport=transport,**kw))
+    path=tmp_path/'memory.sqlite3'
+    with pytest.raises(HTTPException):
+        with diagnostics.capture(path,'synthetic'):
+            ai_settings.complete({'key_encrypted':'eA==','base_url':'https://synthetic.invalid','model':'fixture'},'system',{})
+    record=json.loads(diagnostics.files(path)[0].read_text(encoding='utf-8'))
+    assert record['code']=='D102' and bool(record['raw_prefix'])==keep
+    assert len((record['raw_prefix'] or '').encode('utf-8'))<=2048 and record['raw'] is None

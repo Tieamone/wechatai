@@ -48,12 +48,13 @@ def build(root,output):
                 fresh=fresh and not db.execute('SELECT 1 FROM memory_evidence e JOIN suppressed_evidence s ON s.message_id=e.message_id AND s.message_revision=e.message_revision WHERE e.memory_id=?',(mid,)).fetchone()
                 confirmed=bool(review and memory['status']=='active' and review['confirmed_version']==memory['version'] and fresh)
                 actions=[]
-                for f in db.execute('SELECT * FROM feedback WHERE memory_id=?',(mid,)):
+                for f in db.execute('SELECT * FROM feedback WHERE memory_id=? ORDER BY id',(mid,)):
                     snapshot=json.loads(f['evidence_json'])
                     valid=bool(f['valid'] and f['memory_version']==memory['version'] and fresh and sorted(snapshot,key=lambda e:json.dumps(e,sort_keys=True))==sorted(evidence,key=lambda e:json.dumps(e,sort_keys=True)))
                     actions.append({'id':f['id'],'memory_version':f['memory_version'],'action':f['action'],'valid':valid})
                 legacy=db.execute('SELECT count(*) FROM correction WHERE memory_id=?',(mid,)).fetchone()[0]
-                value='low_value' if any(f['valid'] and f['action']=='low_value' for f in actions) else None
+                latest=next((f['action'] for f in reversed(actions) if f['valid'] and f['action'] in ('low_value','clear_low_value')),None)
+                value='low_value' if latest=='low_value' else None
                 report['value_labels']+=int(value is not None)
                 window['memories'].append({'memory_id':mid,'memory_version':memory['version'],'status':memory['status'],'confirmed_current':confirmed,
                     'evidence_fresh':bool(fresh),'evidence':evidence,'feedback':actions,'unversioned_corrections':legacy,'value_label':value})

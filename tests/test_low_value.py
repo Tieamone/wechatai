@@ -38,3 +38,22 @@ def test_evaluation_consumes_only_explicit_value_labels(client,tmp_path):
     report=json.loads((tmp_path/'private/materials/evidence-index.json').read_text(encoding='utf-8'))
     assert report['value_labels']==1 and report['windows'][0]['memories'][0]['value_label']=='low_value'
     assert report['valuable_memories_per_10000_tokens'] is None
+    client.post('/api/memories/1/review/clear_low_value',json={'expected_version':1}).raise_for_status()
+    assert not client.get('/api/memories').json()[0]['low_value']
+    with connect(client.app.state.db_path) as db,sqlite3.connect(tmp_path/'data/memory.sqlite3') as destination:db.backup(destination)
+    build(tmp_path,tmp_path/'private/materials')
+    report=json.loads((tmp_path/'private/materials/evidence-index.json').read_text(encoding='utf-8'))
+    assert report['value_labels']==0 and report['windows'][0]['memories'][0]['value_label'] is None
+
+
+def test_clear_value_preserves_review_and_rejects_stale_versions(client):
+    client.post('/api/import',json=batch()).raise_for_status();client.post('/api/memories',json=draft()).raise_for_status()
+    for action in ('confirm','low_value','clear_low_value'):
+        client.post('/api/memories/1/review/'+action,json={'expected_version':1}).raise_for_status()
+    card=client.get('/api/memories').json()[0]
+    assert card['confirmed'] and not card['low_value'] and card['status']=='active'
+    assert client.post('/api/memories/1/review/clear_low_value',json={'expected_version':99}).status_code==409
+    with connect(client.app.state.db_path) as db:
+        assert db.execute('SELECT count(*) FROM suppressed_evidence').fetchone()[0]==0
+        snapshots=db.execute("SELECT evidence_json FROM feedback WHERE action IN ('low_value','clear_low_value') ORDER BY id").fetchall()
+        assert snapshots[0][0]==snapshots[1][0]
