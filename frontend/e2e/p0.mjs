@@ -1,9 +1,11 @@
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {failureEvidence} from './failure-evidence.mjs';
 
 const browser=await chromium.launch();
 const context=await browser.newContext();
 const page=await context.newPage();
+const captureFailure=await failureEvidence(context,'pzero');
 const errors=[];
 page.on('pageerror',e=>errors.push(e.message));
 const requests=[];
@@ -47,4 +49,4 @@ try{
   await expect(page.getByRole('alert')).toContainText('登录已失效');
   assert.deepEqual(errors,[]);
   console.log('P0 browser PASS: one-time login, history replacement, refresh, new tab, settings, module/tab polling');
-}finally{await browser.close()}
+}catch(error){await captureFailure(page);throw error}finally{await browser.close()}

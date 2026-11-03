@@ -1,7 +1,9 @@
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {failureEvidence} from './failure-evidence.mjs';
 const browser=await chromium.launch();
 const page=await browser.newPage();
+const captureFailure=await failureEvidence(page.context(),'budgets');
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
 const base='http://127.0.0.1:8765';
 async function api(path,body){const response=await page.request.fetch(base+'/api/'+path,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer browser-test-only'},data:body});assert.ok(response.ok(),await response.text());return response.json()}
@@ -72,4 +74,4 @@ try{
   assert.equal((await api('batches'))[0].state,'cancelled');
   assert.deepEqual(errors,[]);
   console.log('PASS: budget settings, disabled unpriced amount mode, persistent batch limits, actual usage settlement and zero-send exhaustion');
-}finally{await browser.close()}
+}catch(error){await captureFailure(page);throw error}finally{await browser.close()}

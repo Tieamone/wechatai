@@ -2,8 +2,10 @@ import {chromium,expect} from '@playwright/test';
 import {pathToFileURL} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import {failureEvidence} from './failure-evidence.mjs';
 const browser=await chromium.launch();
 const page=await browser.newPage({acceptDownloads:true}),errors=[],external=[];
+const captureFailure=await failureEvidence(page.context(),'calibration');
 page.on('pageerror',e=>errors.push(e.message));
 await page.addInitScript(()=>{Object.defineProperty(window,'localStorage',{get(){throw Error('synthetic disabled storage')}})});
 await page.route('**/*',route=>{if(route.request().url().startsWith('file:'))return route.continue();external.push(route.request().url());return route.abort()});
@@ -46,4 +48,4 @@ try{
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
  console.log('PASS: synthetic calibration blank defaults, disabled storage, progress export/import, stale rejection, no raw export, XSS and narrow layout');
-}finally{await browser.close()}
+}catch(error){await captureFailure(page);throw error}finally{await browser.close()}

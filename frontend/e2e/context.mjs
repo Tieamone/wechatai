@@ -1,8 +1,10 @@
 import {chromium,expect} from '@playwright/test';
 import {mkdirSync} from 'node:fs';
 import assert from 'node:assert/strict';
+import {failureEvidence} from './failure-evidence.mjs';
 const browser=await chromium.launch();
 const page=await browser.newPage({viewport:{width:1280,height:900}});
+const captureFailure=await failureEvidence(page.context(),'context');
 const errors=[];
 page.on('pageerror',error=>errors.push(error.message));
 try{
@@ -31,4 +33,4 @@ try{
   await page.screenshot({path:'../docs/screenshots/context-demo.png',fullPage:true});
   assert.deepEqual(errors,[]);
   console.log('PASS: preset context negation/reported fields, complete evidence, synthetic banner and task status');
-}finally{await browser.close()}
+}catch(error){await captureFailure(page);throw error}finally{await browser.close()}
