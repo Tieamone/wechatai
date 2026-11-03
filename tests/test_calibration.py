@@ -51,3 +51,27 @@ def test_workload_distinguishes_unassigned_messages_from_frozen_windows(client):
     frozen=report(client.app.state.db_path)
     assert frozen['remaining_history_windows']==1 and frozen['known_text_not_yet_assigned']==0
     assert frozen['estimated_total_tokens']==2600
+
+
+def test_new_semantics_derive_support_with_explicit_override():
+    human={'format':2,'label_semantics':'accuracy_from_conclusion_v2','snapshot_sha256':'synthetic','labels':[
+        {'memory_id':1,'memory_version':1,'conclusion':'long'},
+        {'memory_id':2,'memory_version':1,'conclusion':'incorrect'},
+        {'memory_id':3,'memory_version':1,'conclusion':'short','evidence_support':'unsupported'},
+        {'memory_id':4,'memory_version':1,'conclusion':'uncertain'}]}
+    reviewer={'snapshot_sha256':'synthetic','reviews':[{'memory_id':i,'memory_version':1,'evidence_support':v} for i,v in [(1,'supported'),(2,'unsupported'),(3,'unsupported'),(4,'supported')]]}
+    result=evaluate(human,reviewer)
+    assert result['derived_support_count']==2 and result['explicit_support_count']==1
+    assert result['support_conflicts']==1 and result['dimensions']['evidence_support']['comparable']==3
+    assert result['dimensions']['evidence_support']['agreement']==1
+    assert result['evidence_support_sources'][0]['source']=='derived_v2'
+    human['format']=1
+    assert evaluate(human,reviewer)['derived_support_count']==0
+
+
+def test_review_sensitive_boolean_adapter():
+    human={'snapshot_sha256':'synthetic','labels':[{'memory_id':1,'memory_version':1,'sensitive_type':'health_financial'}]}
+    reviewer={'snapshot_sha256':'synthetic','reviews':[{'memory_id':1,'memory_version':1,'sensitive_type':{'health':True,'financial':True,'privacy_token':False}}]}
+    assert evaluate(human,reviewer)['dimensions']['sensitive_type']['agreement']==1
+    reviewer['reviews'][0]['sensitive_type']['health']=1
+    assert evaluate(human,reviewer)['dimensions']['sensitive_type']['comparable']==0
