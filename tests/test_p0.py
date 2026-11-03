@@ -84,6 +84,7 @@ def seed(tmp_path):
         db.execute('UPDATE notification_policy SET quiet_enabled=0')
         db.execute("INSERT INTO conversation VALUES('fixture','fixture','fixture')")
         db.execute("INSERT INTO memory(id,summary,subject,polarity,assertion,temporal_kind,fingerprint) VALUES(1,'合成记忆','peer','positive','direct','fact','fixture')")
+        db.execute('INSERT INTO memory_review(memory_id,confirmed_version) VALUES(1,1)')
         for mid in (1,2,3):
             db.execute("INSERT INTO message(id,conversation_id,adapter,source_id,partition,sender_role,event_utc,text,type,revision) VALUES(?,'fixture','test',?,'test','peer',?,'合成文字','text',1)",(mid,str(mid),stamp()))
             db.execute('INSERT INTO watch_item(id,user_text,source_memory_id) VALUES(?,?,1)',(mid,'fixture'+str(mid)))

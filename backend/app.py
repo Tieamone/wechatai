@@ -206,8 +206,9 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
 
     @app.get('/api/watches')
     def watches():
+        from .eligibility import confirmed
         with connect(path) as db:
-            return [dict(r) for r in db.execute('SELECT w.*,m.status AS source_status,m.summary AS source_summary FROM watch_item w LEFT JOIN memory m ON m.id=w.source_memory_id ORDER BY w.id DESC')]
+            return [{**dict(r),'source_confirmed':confirmed(db,r['source_memory_id']) if r['source_memory_id'] else None} for r in db.execute('SELECT w.*,m.status AS source_status,m.summary AS source_summary FROM watch_item w LEFT JOIN memory m ON m.id=w.source_memory_id ORDER BY w.id DESC').fetchall()]
 
     @app.post('/api/watches')
     def watch_add(body: Watch):
@@ -229,9 +230,10 @@ def create_app(data_dir: Path | None = None, session_token: str | None = None, *
 
     @app.get('/api/reminders')
     def reminders():
+        from .eligibility import confirmed_sql
         with connect(path) as db:
             cards = []
-            for row in db.execute("SELECT r.*,m.text AS trigger_text,m.event_time,w.user_text,w.source_memory_id FROM reminder r JOIN message m ON m.id=r.trigger_id JOIN watch_item w ON w.id=r.watch_id LEFT JOIN memory fact ON fact.id=w.source_memory_id WHERE r.status='active' AND w.enabled=1 AND r.watch_revision=w.revision AND (w.source_memory_id IS NULL OR fact.status='active') ORDER BY r.id DESC LIMIT 100").fetchall():
+            for row in db.execute("SELECT r.*,m.text AS trigger_text,m.event_time,w.user_text,w.source_memory_id FROM reminder r JOIN message m ON m.id=r.trigger_id JOIN watch_item w ON w.id=r.watch_id LEFT JOIN memory fact ON fact.id=w.source_memory_id WHERE r.status='active' AND w.enabled=1 AND r.watch_revision=w.revision AND (w.source_memory_id IS NULL OR ("+confirmed_sql('fact')+")) ORDER BY r.id DESC LIMIT 100").fetchall():
                 card = dict(row)
                 card['notification'] = policy.card_status(db, 'watch', row['id'])
                 card['recent_context'] = context_quotes(db, row['context_json'])

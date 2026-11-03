@@ -5,6 +5,7 @@ from test_memories import draft
 def setup_watch(client):
     client.post('/api/import', json=batch())
     mid = client.post('/api/memories', json=draft()).json()['id']
+    client.post(f'/api/memories/{mid}/review/confirm',json={'expected_version':1}).raise_for_status()
     watch = client.post('/api/watches', json={'user_text':'咖啡','source_memory_id':mid})
     assert watch.status_code == 200
     return mid, watch.json()['id']

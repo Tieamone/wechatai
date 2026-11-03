@@ -2,6 +2,7 @@
 import json
 
 from .associations import recent_messages, evidence_before
+from .eligibility import confirmed
 
 
 def invalidate_context(db, message_id):
@@ -18,6 +19,7 @@ def update_watches(db, message_id):
     ids=[r['id'] for r in recent]
     serialized=json.dumps(ids)
     for watch in db.execute("SELECT w.* FROM watch_item w LEFT JOIN memory m ON m.id=w.source_memory_id WHERE w.enabled=1 AND (w.source_memory_id IS NULL OR m.status='active')").fetchall():
+        if watch['source_memory_id'] is not None and not confirmed(db,watch['source_memory_id']):continue
         if watch['source_memory_id'] is not None and not evidence_before(db,watch['source_memory_id'],recent[0]['event_utc']):
             continue
         previous=db.execute('SELECT * FROM reminder WHERE watch_id=? AND watch_revision=? AND trigger_id IN ('+','.join('?' for _ in ids)+') ORDER BY id DESC LIMIT 1',

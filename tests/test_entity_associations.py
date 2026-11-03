@@ -10,6 +10,7 @@ from test_memories import draft
 def setup(client,evidence_time='2026-10-17T00:00:00Z',extra=''):
     client.post('/api/import',json=batch('阿王花生过敏'))
     client.post('/api/memories',json=draft(summary='阿王花生过敏'))
+    client.post('/api/memories/1/review/confirm',json={'expected_version':1}).raise_for_status()
     evidence=batch('阿王也叫小李'+extra,source_id='aliases')
     evidence['messages'][0]['event_time']=evidence_time
     client.post('/api/import',json=evidence)

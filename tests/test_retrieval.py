@@ -15,6 +15,7 @@ def test_readonly_recall_matches_frozen_algorithm(tmp_path,monkeypatch,people):
             db.execute("INSERT INTO message(id,conversation_id,adapter,source_id,partition,sender_role,text,event_utc,type,revision) VALUES(?,'fixture','test',?,'test',?,?,?,'text',1)",(mid,str(mid),role,text,instant))
         for mid in range(1,21):
             db.execute("INSERT INTO memory(id,summary,subject,polarity,assertion,temporal_kind,fingerprint,status) VALUES(?,?,'peer','positive','direct','fact',?,?)",(mid,'咖啡' if mid%2 else '人物',str(mid),'incorrect' if mid==20 else 'active'))
+            db.execute('INSERT INTO memory_review(memory_id,confirmed_version) VALUES(?,1)',(mid,))
             if mid!=19:
                 db.execute('INSERT INTO memory_evidence VALUES(?,?,?,?,?)',(mid,2 if mid==18 else 1,2 if mid==17 else 1,0,2))
     if people:

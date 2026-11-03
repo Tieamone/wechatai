@@ -9,6 +9,7 @@ from test_memories import draft
 def setup(client,when='2026-10-19T19:00:00+08:00',mode='live'):
     client.post('/api/import',json=batch())
     client.post('/api/memories',json=draft())
+    client.post('/api/memories/1/review/confirm',json={'expected_version':1}).raise_for_status()
     body=batch('今天喝咖啡吗',source_id='2',mode=mode)
     body['messages'][0]['event_time']=when
     client.post('/api/import',json=body)
