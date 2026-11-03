@@ -10,6 +10,8 @@
 
 `python -m tools.workload_report` 只读统计当前 active/paused 历史范围，未真实提炼窗口包含 prepared、failed、blocked_privacy 及合成完成，排除 validated_model/cancelled 和自动范围。阻断窗口不等于可立即付费运行。以 v2 近似每窗 2600 Token 估算，仅用于预算规划，不含未来精修、敏感双审核或重试成本。
 
+另报尚未分配历史窗口且未由模型处理的已知时间文字数，按会话、每窗口约新增十条给补充窗口估计；它们不能冒充已冻结的实际窗口。冻结窗口成本和含补充窗口的规划 Token 分开显示，不创建新范围，也不漏报这段待处理出口。
+
 当前精确快照在北京的公开原价：忙时输入/输出每百万 Token 2/8 元，闲时 1/4 元，输出包含推理。使用输入/输出极端配比给金额上下界，不把所有 Token 都按输出价算成精确金额；不计缓存和折扣，不代表真实账单或账号免费额度。一个 1M 总 Token 预算约覆盖 floor(1000000/2600)=384 个窗口，按 90% 留余量约 346 个。价格于 2026-11-03 核对：[官方价格](https://help.aliyun.com/zh/model-studio/model-pricing)、[精确快照说明](https://help.aliyun.com/zh/model-studio/deepseek-v4-1-flash)。不写入价格设置。
 
 未人工确认记忆当前仍参与普通搜索、召回与提醒。代码依据：backend/memories.py 的 listing 默认 active、review 只是分类；backend/associations.py 的 rank_candidates 遍历全部 active，context 核验证据和版本；backend/notifications.py 的 WATCH_VALID 与 _deliver 不读取 memory_review；普通提醒的 confirmed_model 是关联判断结果，不是人工确认。仍须满足现有自动开关、隐私、时序、通知策略，未确认本身不会直接造成发送。

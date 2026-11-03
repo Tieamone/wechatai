@@ -39,3 +39,15 @@ def test_dimension_agreement_does_not_infer_accuracy():
 def test_disagreeing_snapshot_is_rejected():
     import pytest
     with pytest.raises(ValueError):evaluate({'snapshot_sha256':'old','labels':[]},{'snapshot_sha256':'new','reviews':[]})
+
+
+def test_workload_distinguishes_unassigned_messages_from_frozen_windows(client):
+    from tools.workload_report import report
+    client.post('/api/import',json=batch()).raise_for_status()
+    initial=report(client.app.state.db_path)
+    assert initial['remaining_history_windows']==0 and initial['known_text_not_yet_assigned']==1
+    assert initial['additional_windows_estimate']==1
+    client.post('/api/initializations',json={'mode':'full'}).raise_for_status()
+    frozen=report(client.app.state.db_path)
+    assert frozen['remaining_history_windows']==1 and frozen['known_text_not_yet_assigned']==0
+    assert frozen['estimated_total_tokens']==2600
