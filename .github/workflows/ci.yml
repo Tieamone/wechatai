@@ -34,3 +34,4 @@ jobs:
       - run: python -m tools.browser_check --context
       - run: python -m tools.browser_check --p0
       - run: python -m tools.browser_check --budgets
+      - run: python -m tools.calibration_browser_check
