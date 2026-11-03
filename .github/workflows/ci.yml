@@ -29,9 +29,19 @@ jobs:
         working-directory: frontend
       - run: npx playwright install chromium
         working-directory: frontend
+      - run: node e2e/evidence-check.mjs
+        working-directory: frontend
       - run: python -m pytest -q
       - run: python -m tools.browser_check
       - run: python -m tools.browser_check --context
       - run: python -m tools.browser_check --p0
       - run: python -m tools.browser_check --budgets
       - run: python -m tools.calibration_browser_check
+      - name: Upload synthetic browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-artifacts/
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,9 +1,11 @@
 import {chromium,expect} from '@playwright/test';
 import {readFileSync,mkdirSync} from 'node:fs';
 import assert from 'node:assert/strict';
+import {failureEvidence} from './failure-evidence.mjs';
 
 const browser=await chromium.launch();
 const page=await browser.newPage({viewport:{width:1280,height:900}});
+const captureFailure=await failureEvidence(page.context(),'workflow');
 const errors=[];
 let dialogs=0;
 page.on('pageerror',e=>errors.push(e.message));
@@ -140,12 +142,18 @@ try {
   await expect(page.getByText('证据已失效，暂停触发；关注设置保留')).toBeVisible();
   await go('settings/privacy');
   await page.getByLabel('隐私预览文本').fill('联系电话13800138000');
+  const blockedPreview=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/privacy/preview'&&r.request().method()==='POST');
   await page.getByRole('button',{name:'本地预览',exact:true}).click();
+  const blockedResponse=await blockedPreview;
+  assert.ok(blockedResponse.ok());await blockedResponse.json();
   await expect(page.getByText('已阻断',{exact:true})).toBeVisible();
   await page.getByLabel('映射类型').selectOption('PHONE');
   await page.getByLabel('真实值').fill('13800138000');
   await page.getByRole('button',{name:'添加映射'}).click();
+  const mappedPreview=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/privacy/preview'&&r.request().method()==='POST');
   await page.getByRole('button',{name:'本地预览',exact:true}).click();
+  const mappedResponse=await mappedPreview;
+  assert.ok(mappedResponse.ok());await mappedResponse.json();
   await expect(page.getByText('仅预览',{exact:true})).toBeVisible();
   await page.getByRole('button',{name:'检查映射冲突',exact:true}).click();
   await expect(page.getByText('尚未处理，相关预览保持阻断',{exact:true})).toBeVisible();
@@ -231,6 +239,8 @@ try {
   assert.equal(dialogs,0);
   assert.deepEqual(errors,[]);
   console.log('PASS: browser authentication, import, search, memory, watch evidence, correction, privacy, XSS and narrow layout');
+} catch(error) {
+  await captureFailure(page);throw error;
 } finally {
   await browser.close();
 }

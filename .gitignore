@@ -26,3 +26,5 @@ tools/wechat-mcp/dist/
 !/docs/memory-review.md
 /private/
 .publish-private*
+
+/test-artifacts/
