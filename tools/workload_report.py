@@ -15,8 +15,14 @@ def report(path):
         confirmed=db.execute("SELECT count(*) FROM memory m JOIN memory_review r ON r.memory_id=m.id AND r.confirmed_version=m.version WHERE m.status='active'").fetchone()[0]
         active=db.execute("SELECT count(*) FROM memory WHERE status='active'").fetchone()[0]
         temporal=dict(db.execute('SELECT temporal_kind,count(*) FROM memory GROUP BY temporal_kind'))
+        unassigned=[r[0] for r in db.execute("""SELECT count(*) FROM message m WHERE m.type='text' AND m.event_utc IS NOT NULL AND NOT EXISTS(
+            SELECT 1 FROM job_message x JOIN job j ON j.id=x.job_id JOIN initialization i ON i.id=j.initialization_id
+            WHERE x.message_id=m.id AND x.revision=m.revision AND ((i.mode!='auto' AND i.state IN ('active','paused')) OR j.state='validated_model'))
+            GROUP BY m.conversation_id""")]
         return {'schema_version':db.execute('PRAGMA user_version').fetchone()[0],
             'remaining_history_windows':remaining,'history_states':states,'tokens_per_window_assumption':2600,'estimated_total_tokens':total,
+            'known_text_not_yet_assigned':sum(unassigned),'additional_windows_estimate':sum((n+9)//10 for n in unassigned),
+            'planning_total_tokens_including_unassigned':(remaining+sum((n+9)//10 for n in unassigned))*2600,
             'public_price_cny_no_cache_no_discounts':{'busy_input_only_to_output_only':[round(total*2/1000000,4),round(total*8/1000000,4)],
                 'idle_input_only_to_output_only':[round(total/1000000,4),round(total*4/1000000,4)]},
             'one_million_tokens_windows':1000000//2600,'ninety_percent_one_million_windows':900000//2600,
