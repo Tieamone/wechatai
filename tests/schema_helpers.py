@@ -3,6 +3,7 @@ from backend.phase1_schema import SCHEMA
 
 
 def remove_v21(db):
+    remove_pricing(db)
     fields={r[1] for r in db.execute('PRAGMA table_info(usage_ledger)')}
     for name in ('reasoning_tokens','cached_input_tokens','reported_text_tokens'):
         if name in fields:db.execute('ALTER TABLE usage_ledger DROP COLUMN '+name)
@@ -11,3 +12,12 @@ def remove_v21(db):
         db.execute('ALTER TABLE usage_ledger DROP COLUMN '+field)
     start=SCHEMA.index('CREATE TRIGGER deferred_cancel');end=SCHEMA.index('END;',start)+4
     db.executescript(SCHEMA[start:end])
+
+
+def remove_pricing(db):
+    for table,names in (
+        ('usage_ledger',('price_snapshot','sent_at','price_period')),
+        ('budget_policy',('time_pricing','idle_input_rate','idle_output_rate','idle_cached_rate','idle_reasoning_rate'))):
+        fields={r[1] for r in db.execute('PRAGMA table_info('+table+')')}
+        for name in names:
+            if name in fields:db.execute('ALTER TABLE '+table+' DROP COLUMN '+name)

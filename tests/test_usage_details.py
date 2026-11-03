@@ -1,3 +1,4 @@
+from backend.store import SCHEMA_VERSION
 import shutil
 import sqlite3
 import json
@@ -44,6 +45,8 @@ def test_optional_counters_never_add_to_total(tmp_path,details,expected):
 def test_v21_backup_restore_preserves_ledger_and_unknown_details(tmp_path):
     path=tmp_path/'memory.sqlite3';initialize(path)
     with connect(path) as db:
+        from schema_helpers import remove_pricing
+        remove_pricing(db)
         for name in ('reasoning_tokens','cached_input_tokens','reported_text_tokens'):db.execute('ALTER TABLE usage_ledger DROP COLUMN '+name)
         db.execute('PRAGMA user_version=21')
         db.execute("INSERT INTO usage_ledger(kind,model,at,state,reserved_input,reserved_output,input_tokens,output_tokens) VALUES('manual','synthetic',123,'settled',100,4096,5,7)")
@@ -56,7 +59,7 @@ def test_v21_backup_restore_preserves_ledger_and_unknown_details(tmp_path):
     initialize(restored)
     with connect(restored) as db:
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
-        assert db.execute('PRAGMA user_version').fetchone()[0]==22
+        assert db.execute('PRAGMA user_version').fetchone()[0]==SCHEMA_VERSION
         assert tuple(db.execute('SELECT at,input_tokens,output_tokens,reasoning_tokens FROM usage_ledger').fetchone())==(123,5,7,None)
 
 

@@ -21,9 +21,9 @@ def invoke(path, config, system, data, *, kind, sender):
                 raise HTTPException(409,'自动处理已暂停或达到调用上限')
         batch_id,a,b,estimated,lease=budgets.reserve(db,config,estimate,4096)
         record=db.execute('''INSERT INTO usage_ledger(kind,model,at,state,reserved_input,reserved_output,
-                            batch_id,input_rate,output_rate,reserved_cost,lease_until)
-                            VALUES(?,?,?,'reserved',?,4096,?,?,?,?,?)''',
-                          (kind,config.get('model','unknown'),time.time(),estimate,batch_id,a,b,estimated,lease)).lastrowid
+                            batch_id,input_rate,output_rate,reserved_cost,lease_until,price_snapshot)
+                            VALUES(?,?,?,'reserved',?,4096,?,?,?,?,?,?)''',
+                          (kind,config.get('model','unknown'),time.time(),estimate,batch_id,a,b,estimated,lease,budgets.price_snapshot(budgets.policy(db),config))).lastrowid
     token=CURRENT.set((path,record))
     try:
         result=sender(config,system,data)
@@ -47,7 +47,13 @@ def mark_sent():
                 if row['batch_id'] is not None:
                     run=db.execute('SELECT state FROM batch_run WHERE id=?',(row['batch_id'],)).fetchone()
                     if not run or run['state']!='active':raise HTTPException(429,'批量任务已暂停或取消，未发送')
-                db.execute("UPDATE usage_ledger SET state='unknown',lease_until=NULL WHERE id=? AND state='reserved'",(context[1],))
+                sent_at=time.time();snapshot=json.loads(row['price_snapshot']) if row['price_snapshot'] else None
+                a,b=row['input_rate'],row['output_rate'];period=None
+                if snapshot:
+                    period=('idle' if budgets.idle(sent_at) else 'busy') if snapshot['time_pricing'] else 'fixed'
+                    prefix='idle_' if period=='idle' else ''
+                    a,b=snapshot[prefix+'input_rate'],snapshot[prefix+'output_rate']
+                db.execute("UPDATE usage_ledger SET state='unknown',lease_until=NULL,sent_at=?,price_period=?,input_rate=?,output_rate=? WHERE id=? AND state='reserved'",(sent_at,period,a,b,context[1]))
 
 
 def trace(event, info):

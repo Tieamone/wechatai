@@ -1,5 +1,7 @@
 """Atomic reservation limits; money is integer micro-yuan, rates per million tokens."""
 from contextvars import ContextVar
+from datetime import datetime,timedelta,timezone
+import json
 import time
 from fastapi import APIRouter,HTTPException
 from pydantic import Field,model_validator
@@ -20,9 +22,21 @@ class Settings(StrictModel):
     output_rate:int|None=Field(default=None,ge=0,le=1000000000000)
     cached_rate:int|None=Field(default=None,ge=0,le=1000000000000)
     reasoning_rate:int|None=Field(default=None,ge=0,le=1000000000000)
+    time_pricing:bool=False
+    idle_input_rate:int|None=Field(default=None,ge=0,le=1000000000000)
+    idle_output_rate:int|None=Field(default=None,ge=0,le=1000000000000)
+    idle_cached_rate:int|None=Field(default=None,ge=0,le=1000000000000)
+    idle_reasoning_rate:int|None=Field(default=None,ge=0,le=1000000000000)
 
     @model_validator(mode='after')
     def pricing(self):
+        if self.time_pricing:
+            if any(x is None for x in (self.input_rate,self.output_rate,self.idle_input_rate,self.idle_output_rate)):
+                raise ValueError('忙闲计价需同时填写忙时和闲时输入、输出单价')
+            if max(self.idle_input_rate,self.idle_cached_rate or 0)>max(self.input_rate,self.cached_rate or 0) or max(self.idle_output_rate,self.idle_reasoning_rate or 0)>max(self.output_rate,self.reasoning_rate or 0):
+                raise ValueError('忙时单价必须覆盖闲时单价，保证预留为保守上界')
+        if any(x is not None for x in (self.idle_input_rate,self.idle_output_rate,self.idle_cached_rate,self.idle_reasoning_rate)) and self.input_rate is None:
+            raise ValueError('闲时单价也必须绑定已确认的模型与忙时单价')
         if (self.input_rate is None)!=(self.output_rate is None):raise ValueError('输入和输出单价需同时填写')
         if self.input_rate is not None and (not self.model or not self.base_url):raise ValueError('单价必须绑定模型和接口')
         if (self.cached_rate is not None or self.reasoning_rate is not None) and self.input_rate is None:raise ValueError('请先填写输入和输出单价')
@@ -36,6 +50,16 @@ def policy(db):return dict(db.execute('SELECT * FROM budget_policy WHERE id=1').
 
 def cost(input_tokens,output_tokens,input_rate,output_rate):
     return (input_tokens*input_rate+output_tokens*output_rate+MILLION-1)//MILLION
+
+
+def idle(at=None):
+    hour=datetime.fromtimestamp(time.time() if at is None else at,timezone(timedelta(hours=8),'Asia/Shanghai')).hour
+    return hour>=22 or hour<8
+
+
+def price_snapshot(settings,config):
+    if settings['model']!=config.get('model') or settings['base_url']!=config.get('base_url') or settings['input_rate'] is None:return None
+    return json.dumps({k:settings[k] for k in ('time_pricing','input_rate','output_rate','cached_rate','reasoning_rate','idle_input_rate','idle_output_rate','idle_cached_rate','idle_reasoning_rate')})
 
 
 def totals(db,*,batch_id=None):
@@ -112,7 +136,7 @@ def router(path):
         if body.input_rate is not None and (body.model!=config.get('model') or body.base_url!=config.get('base_url')):
             # A model switch must not prevent disabling an old policy.
             with connect(path) as db:previous=policy(db)
-            fields=('model','base_url','input_rate','output_rate','cached_rate','reasoning_rate')
+            fields=('model','base_url','input_rate','output_rate','cached_rate','reasoning_rate','time_pricing','idle_input_rate','idle_output_rate','idle_cached_rate','idle_reasoning_rate')
             if body.enabled or any(data[k]!=previous[k] for k in fields):
                 raise HTTPException(409,'单价必须绑定当前已保存的模型和接口')
         with connect(path) as db:
